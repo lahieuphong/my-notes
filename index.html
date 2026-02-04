@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ghi chú - my-notes</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;max-width:980px;margin:18px auto;padding:12px;}
+  header{display:flex;gap:8px;align-items:center;justify-content:space-between}
+  input[type="search"]{padding:6px;border-radius:6px;border:1px solid #ddd}
+  main{display:grid;grid-template-columns:320px 1fr;gap:12px;margin-top:12px}
+  .sidebar{border:1px solid #e6e6e6;padding:10px;border-radius:8px;height:70vh;overflow:auto}
+  .note-item{padding:8px;border-radius:6px;margin-bottom:6px;border:1px solid transparent;cursor:pointer}
+  .note-item.active{background:#f0f8ff;border-color:#cfe8ff}
+  .controls{display:flex;gap:6px}
+  textarea{width:100%;height:60vh;padding:10px;border-radius:8px;border:1px solid #ddd;resize:vertical}
+  .title{width:100%;padding:8px;border-radius:6px;border:1px solid #ddd;margin-bottom:8px}
+  button{padding:8px 10px;border-radius:6px;border:none;background:#0366d6;color:white;cursor:pointer}
+  button.ghost{background:#eee;color:#222}
+  .small{padding:6px 8px;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <div style="display:flex;gap:8px;align-items:center">
+    <h2 style="margin:0">Ghi chú</h2>
+    <small style="color:#666">— offline (localStorage)</small>
+  </div>
+  <div>
+    <input id="search" type="search" placeholder="Tìm..." />
+    <button id="newBtn" class="small">Mới</button>
+    <button id="exportBtn" class="small ghost">Xuất</button>
+    <input id="importFile" type="file" accept="application/json" style="display:none" />
+    <button id="importBtn" class="small ghost">Nhập</button>
+  </div>
+</header>
+
+<main>
+  <aside class="sidebar">
+    <div id="notesList"></div>
+  </aside>
+
+  <section>
+    <input id="title" class="title" placeholder="Tiêu đề..." />
+    <textarea id="content" placeholder="Viết ghi chú..."></textarea>
+    <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+      <div class="controls">
+        <button id="saveBtn">Lưu</button>
+        <button id="deleteBtn" class="ghost">Xóa</button>
+      </div>
+      <div style="margin-left:auto;color:#666" id="status">Không có ghi chú</div>
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  const KEY = 'my_notes_v1';
+  let notes = [];
+  let activeId = null;
+  function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,8) }
+  function now(){ return new Date().toISOString() }
+  function loadNotes(){ try { notes = JSON.parse(localStorage.getItem(KEY) || '[]'); } catch(e){ notes = [] } }
+  function saveNotes(){ localStorage.setItem(KEY, JSON.stringify(notes)); }
+
+  const notesListEl = document.getElementById('notesList');
+  const titleEl = document.getElementById('title');
+  const contentEl = document.getElementById('content');
+  const statusEl = document.getElementById('status');
+  const searchEl = document.getElementById('search');
+
+  function renderList(filter=''){
+    notesListEl.innerHTML = '';
+    const filtered = notes.slice().sort((a,b)=> b.updated.localeCompare(a.updated))
+      .filter(n => (n.title + ' ' + n.content).toLowerCase().includes(filter.toLowerCase()));
+    if(filtered.length===0) notesListEl.innerHTML = '<p style="color:#777">Chưa có ghi chú</p>';
+    filtered.forEach(n => {
+      const div = document.createElement('div');
+      div.className = 'note-item' + (n.id===activeId ? ' active':'');
+      div.innerHTML = '<strong>' + (n.title||'(Không tiêu đề)') + '</strong><div style="font-size:12px;color:#666">' + new Date(n.updated).toLocaleString() + '</div>';
+      div.addEventListener('click', ()=> openNote(n.id));
+      notesListEl.appendChild(div);
+    });
+  }
+
+  function openNote(id){
+    const n = notes.find(x=>x.id===id);
+    if(!n) return;
+    activeId = id;
+    titleEl.value = n.title;
+    contentEl.value = n.content;
+    statusEl.textContent = 'Sửa: ' + new Date(n.updated).toLocaleString();
+    renderList(searchEl.value);
+  }
+
+  function createNote(){
+    const n = { id: uid(), title:'', content:'', created: now(), updated: now() };
+    notes.push(n);
+    saveNotes();
+    openNote(n.id);
+    renderList(searchEl.value);
+  }
+
+  function persistActive(){
+    if(!activeId) return;
+    const n = notes.find(x=>x.id===activeId); if(!n) return;
+    n.title = titleEl.value; n.content = contentEl.value; n.updated = now();
+    saveNotes();
+    statusEl.textContent = 'Đã lưu: ' + new Date(n.updated).toLocaleString();
+    renderList(searchEl.value);
+  }
+
+  function deleteActive(){
+    if(!activeId) return;
+    notes = notes.filter(x=>x.id!==activeId); activeId = null;
+    titleEl.value = ''; contentEl.value = '';
+    saveNotes(); renderList(searchEl.value); statusEl.textContent = 'Đã xóa';
+  }
+
+  function exportAll(){
+    const blob = new Blob([JSON.stringify(notes, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'notes.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+  function importFile(file){
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = e=>{
+      try{
+        const arr = JSON.parse(e.target.result);
+        if(Array.isArray(arr)){
+          notes = arr.map(n=>({ id: n.id || uid(), title: n.title || '', content: n.content || '', created: n.created || now(), updated: n.updated || now() }));
+          saveNotes(); renderList(searchEl.value); statusEl.textContent = 'Nhập thành công';
+        } else { alert('File không đúng định dạng') }
+      }catch(err){ alert('Không đọc được file: '+err.message) }
+    };
+    reader.readAsText(file);
+  }
+
+  document.getElementById('newBtn').onclick = createNote;
+  document.getElementById('saveBtn').onclick = persistActive;
+  document.getElementById('deleteBtn').onclick = ()=>{ if(confirm('Chắc chắn xóa?')) deleteActive(); };
+  document.getElementById('exportBtn').onclick = exportAll;
+  document.getElementById('importBtn').onclick = ()=> document.getElementById('importFile').click();
+  document.getElementById('importFile').onchange = e=> importFile(e.target.files[0]);
+  searchEl.oninput = e=> renderList(e.target.value);
+
+  let autoTimer = null;
+  [titleEl, contentEl].forEach(el=>{
+    el.addEventListener('input', ()=>{
+      if(!activeId) return;
+      if(autoTimer) clearTimeout(autoTimer);
+      autoTimer = setTimeout(()=> persistActive(), 600);
+    });
+  });
+
+  loadNotes(); renderList(); if(notes.length) openNote(notes[0].id);
+})();
+</script>
+</body>
+</html>

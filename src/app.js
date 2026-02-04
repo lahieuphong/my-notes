@@ -279,28 +279,20 @@ import { auth, db, provider } from './lib/firebase.js';
   
   if(btnSignIn){
     btnSignIn.onclick = async () => {
-      const fb = (typeof window !== 'undefined' && window.__MYNOTES_FB) ? window.__MYNOTES_FB : null;
-      const localAuth = fb ? fb.auth : (typeof auth !== 'undefined' ? auth : null);
-      const localProvider = fb ? fb.provider : (typeof provider !== 'undefined' ? provider : null);
+      const auth = getAuth();
 
-      console.log('SignIn click debug:', { localAuth, localProvider });
-
-      if(!localAuth || !localProvider){
-        console.error('Auth or provider missing - aborting sign-in', { localAuth, localProvider });
-        alert('Đăng nhập thất bại: cấu hình auth chưa sẵn sàng. Mở console để xem chi tiết.');
-        return;
-      }
-      if(typeof localProvider.providerId === 'undefined'){
-        console.error('Invalid provider object', localProvider);
-        alert('Đăng nhập thất bại: provider không hợp lệ. Xem console.');
+      // 🔒 ĐANG LOGIN RỒI → KHÔNG GỌI signInWithPopup
+      if (auth.currentUser) {
+        console.log("Already signed in:", auth.currentUser.uid);
         return;
       }
 
       try {
-        await signInWithPopup(localAuth, localProvider);
-      } catch(e) {
-        console.error('Sign-in error (popup):', e);
-        alert('Đăng nhập thất bại: ' + (e.message || e.code || e));
+        console.log("SignIn click debug:", auth, provider);
+        await signInWithPopup(auth, provider);
+      } catch (err) {
+        console.error("Sign-in error (popup):", err);
+        alert("Đăng nhập thất bại: " + err.code);
       }
     };
   }
@@ -318,21 +310,46 @@ import { auth, db, provider } from './lib/firebase.js';
 
   // Auth state listener
   onAuthStateChanged(auth, async (user) => {
+    console.log("onAuthStateChanged:", user?.uid ?? null);
+
     currentUser = user;
-    console.log('onAuthStateChanged:', user ? user.uid : null);
-    if(user){
-      if(btnSignIn) btnSignIn.style.display = 'none';
-      if(btnSignOut) btnSignOut.style.display = '';
-      if(syncStatus) syncStatus.textContent = 'Đang đồng bộ...';
-      loadNotesLocal();
-      const ok = await loadNotesFromFirestore(user.uid);
-      if(syncStatus) syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ, dùng local';
-    } else {
-      if(btnSignIn) btnSignIn.style.display = '';
-      if(btnSignOut) btnSignOut.style.display = 'none';
-      if(syncStatus) syncStatus.textContent = 'Offline';
-      loadNotesLocal();
+
+    // ===== UI: Login / Logout =====
+    if (btnSignIn) {
+      btnSignIn.style.display = user ? 'none' : '';
+      btnSignIn.disabled = !!user;
+      btnSignIn.textContent = user ? 'Đã đăng nhập' : 'Đăng nhập Google';
     }
+
+    if (btnSignOut) {
+      btnSignOut.style.display = user ? '' : 'none';
+    }
+
+    // ===== Sync status =====
+    if (syncStatus) {
+      syncStatus.textContent = user ? 'Đang đồng bộ...' : 'Offline';
+    }
+
+    // ===== Data loading =====
+    loadNotesLocal();
+
+    if (user) {
+      try {
+        const ok = await loadNotesFromFirestore(user.uid);
+        if (syncStatus) {
+          syncStatus.textContent = ok
+            ? 'Đồng bộ (cloud)'
+            : 'Lỗi đồng bộ, dùng local';
+        }
+      } catch (err) {
+        console.error('Firestore sync error:', err);
+        if (syncStatus) {
+          syncStatus.textContent = 'Lỗi đồng bộ, dùng local';
+        }
+      }
+    }
+
+    // ===== Render =====
     renderNotes(qInput ? qInput.value : '');
   });
 

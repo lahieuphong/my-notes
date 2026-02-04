@@ -275,7 +275,7 @@ import { auth, db, provider } from './lib/firebase.js';
     }
   };
   
-
+  // DEBUG: force popup to observe errors immediately (temporary)
   if(btnSignIn){
     btnSignIn.onclick = async () => {
       if(!auth){
@@ -287,34 +287,20 @@ import { auth, db, provider } from './lib/firebase.js';
       btnSignIn.disabled = true;
 
       try {
-        const preferRedirect = useRedirectByDefault();
-        if(!preferRedirect){
-          // try popup on localhost/dev
-          await signInWithPopup(auth, provider);
-          console.log('Signed in with popup');
-        } else {
-          // in production prefer redirect (less likely to be blocked)
-          console.log('Using redirect sign-in (production)');
-          await signInWithRedirect(auth, provider);
-          // redirect will occur -> onAuthStateChanged will run after return
-        }
+        console.log('DEBUG: attempting signInWithPopup (forced)');
+        await signInWithPopup(auth, provider);
+        console.log('DEBUG: signInWithPopup succeeded');
       } catch(e) {
-        console.error('Sign-in error', e);
-        // popup-blocked or cancelled -> attempt redirect fallback
-        const popupBlocked = e && (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request' || e.code === 'auth/internal-error');
-        if(popupBlocked){
-          try {
-            console.warn('Popup blocked/cancelled — trying redirect fallback');
-            await signInWithRedirect(auth, provider);
-            return;
-          } catch(e2){
-            console.error('Redirect fallback failed', e2);
-          }
-        }
+        console.error('DEBUG sign-in error (popup):', e);
         let hint = '';
-        if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nLỗi: unauthorized-domain — hãy thêm domain (vd: lahieuphong.github.io) vào Firebase Console → Authentication → Authorized domains.';
+        if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nLỗi: unauthorized-domain — thêm domain vào Firebase Console → Authentication → Authorized domains.';
         if(e && e.code === 'auth/operation-not-allowed') hint = '\n\nLỗi: operation-not-allowed — bật Google Sign-In trong Firebase Console → Authentication → Sign-in method.';
-        alert('Đăng nhập thất bại: ' + (e.message || e.code || e) + hint);
+        if(e && typeof e === 'object') {
+          // show structured info for easier debugging
+          alert('Đăng nhập thất bại (popup). Xem console để biết chi tiết.\n\n' + (e.message || e.code || JSON.stringify(e)));
+        } else {
+          alert('Đăng nhập thất bại: ' + e);
+        }
       } finally {
         signInInProgress = false;
         if(btnSignIn) btnSignIn.disabled = false;

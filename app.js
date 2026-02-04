@@ -1,7 +1,19 @@
 // app.js (type="module")
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
-import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  addDoc,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
 (() => {
   // ----------------- PASTE FIREBASE CONFIG OBJECT FROM CONSOLE HERE -----------------
@@ -67,7 +79,54 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
   function saveNotesLocal(){ localStorage.setItem(LS_KEY, JSON.stringify(notes)) }
 
   // ---------------- Remote helpers (Firestore) ----------------
+
+  // === LƯU NOTE MỚI VÀO COLLECTION 'notes' (THEO YÊU CẦU) ===
+  async function saveNoteToFirestore(note){
+    if(!db || !currentUser) return;
+    try{
+      await addDoc(collection(db, 'notes'), {
+        title: note.title,
+        content: note.content,
+        created: note.created,
+        updated: note.updated,
+        userId: currentUser.uid,
+        createdAt: serverTimestamp(),
+      });
+      // Không ép cập nhật local id -> chúng ta dùng Firestore doc id khi load later
+      return true;
+    }catch(e){
+      console.error('saveNoteToFirestore error', e)
+      return false;
+    }
+  }
+
+  // === LOAD NOTES THEO USER TỪ COLLECTION 'notes' ===
+  async function loadNotesFromFirestore(uid){
+    if(!db) return;
+    try{
+      const q = query(
+        collection(db, 'notes'),
+        where('userId', '==', uid),
+        orderBy('updated', 'asc')
+      );
+
+      const snap = await getDocs(q);
+      notes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // ensure numeric timestamps (Firestore may return Timestamp objects if used) --
+      // but we'll just persist whatever came from Firestore and save locally.
+      saveNotesLocal();
+      return true;
+    }catch(e){
+      console.error('loadNotesFromFirestore error', e)
+      return false;
+    }
+  }
+
+  // ---------------- OLD REMOTE HELPERS (KEPT FOR REFERENCE BUT NOT USED) ----------------
+  // As requested: do not delete these functions but stop using them.
   async function loadNotesRemote(uid){
+    // ORIGINAL: load notes from 'users' doc and merge with local
+    // Kept here for reference only — this function is no longer invoked.
     if(!db) return false
     try{
       const ref = doc(db, 'users', uid)
@@ -91,6 +150,8 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
   }
 
   async function saveNotesRemote(uid){
+    // ORIGINAL: save entire notes array into users doc
+    // Kept for reference only — this function is no longer invoked.
     if(!db) return false
     try{
       const ref = doc(db, 'users', uid)
@@ -101,6 +162,7 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
       return false
     }
   }
+  // -------------------------------------------------------------------------------------
 
   // Merge two arrays of notes by id; use item with larger updated timestamp when conflict;
   // include notes that exist in only one side.
@@ -167,12 +229,12 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
     const n = { id: uid(), title: '', content: '', created: now, updated: now }
     notes.push(n)
     saveNotesLocal()
-    if(currentUser) saveNotesRemote(currentUser.uid)
+    // NOTE: we do NOT automatically call saveNoteToFirestore here (per instructions).
     renderNotes(qInput.value)
     openNote(n.id)
   }
 
-  function saveActiveNote(){
+  async function saveActiveNote(){
     if(!activeId) return
     const n = notes.find(x=>x.id===activeId)
     if(!n) return
@@ -180,7 +242,10 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
     n.content = contentEl.value
     n.updated = Date.now()
     saveNotesLocal()
-    if(currentUser) saveNotesRemote(currentUser.uid)
+    if(currentUser){
+      // NEW: save single note to Firestore (as requested)
+      await saveNoteToFirestore(n)
+    }
     renderNotes(qInput.value)
     metaEl.textContent = `Tạo: ${new Date(n.created).toLocaleString()} • Cập nhật: ${new Date(n.updated).toLocaleString()}`
     btnSave.textContent = 'Đã lưu'
@@ -192,7 +257,7 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
     if(!confirm('Xác nhận xóa ghi chú này?')) return
     notes = notes.filter(x=>x.id!==activeId)
     saveNotesLocal()
-    if(currentUser) saveNotesRemote(currentUser.uid)
+    // Note: we are NOT deleting from Firestore here. Could be added if needed.
     activeId = null
     editor.style.display = 'none'
     emptyState.style.display = ''
@@ -203,7 +268,7 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
     if(!confirm('Xóa tất cả ghi chú? Hành động không thể hoàn tác.')) return
     notes = []
     saveNotesLocal()
-    if(currentUser) saveNotesRemote(currentUser.uid)
+    // Note: we are NOT deleting all Firestore notes here.
     activeId = null
     editor.style.display = 'none'
     emptyState.style.display = ''
@@ -229,7 +294,7 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
             })
           }
           saveNotesLocal();
-          if(currentUser) await saveNotesRemote(currentUser.uid);
+          // If you want to push imported notes to Firestore, consider looping saveNoteToFirestore here.
           renderNotes(); alert('Nhập thành công')
         }else{
           alert('Tập tin không chứa mảng ghi chú')
@@ -267,9 +332,9 @@ import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/fireb
       btnSignIn.style.display = 'none'
       btnSignOut.style.display = ''
       syncStatus.textContent = 'Đang đồng bộ...'
-      // Load local first, then remote and merge
+      // Load local first, then load from Firestore for this user
       loadNotesLocal()
-      const ok = await loadNotesRemote(user.uid)
+      const ok = await loadNotesFromFirestore(user.uid)
       if(ok) syncStatus.textContent = 'Đồng bộ (cloud)'
       else syncStatus.textContent = 'Lỗi đồng bộ, dùng local'
     }else{

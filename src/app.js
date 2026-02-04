@@ -102,7 +102,6 @@ import { auth, db, provider } from './lib/firebase.js';
   async function loadNotesFromFirestore(uid){
     if(!db) return false;
     try {
-      // không dùng orderBy để tránh cần composite index
       const q = query(collection(db, 'notes'), where('userId','==', uid));
       const snap = await getDocs(q);
       notes = snap.docs.map(d => {
@@ -119,7 +118,6 @@ import { auth, db, provider } from './lib/firebase.js';
 
       // sort client-side by updated ascending
       notes.sort((a,b) => (a.updated || 0) - (b.updated || 0));
-
       saveNotesLocal();
       console.log('Loaded notes from firestore, count=', notes.length);
       return true;
@@ -128,7 +126,7 @@ import { auth, db, provider } from './lib/firebase.js';
       if(e && e.message && e.message.includes('requires an index')) {
         const match = e.message.match(/(https?:\/\/[^\s)]+)/);
         if(match) {
-          console.info('Firestore requires composite index. Create it here:', match[1]);
+          console.info('Create index here:', match[1]);
           alert('Firestore: Query requires a composite index. Mở console để click link tạo index hoặc vào Firebase Console -> Indexes.');
         } else {
           alert('Firestore: Query requires a composite index. Đi tới Firebase Console -> Indexes để tạo.');
@@ -279,7 +277,6 @@ import { auth, db, provider } from './lib/firebase.js';
     }
   };
   
-  // DEBUG: force popup to observe errors immediately (temporary)
   if(btnSignIn){
     btnSignIn.onclick = async () => {
       if(!auth){
@@ -316,7 +313,7 @@ import { auth, db, provider } from './lib/firebase.js';
         }
 
         if(e && e.code && e.code.startsWith('app/')) {
-          alert('Lỗi Auth (IndexedDB). Clear site data hoặc mở Incognito, hoặc tắt extensions (TronLink). Xem console để biết chi tiết.');
+          alert('Lỗi Auth (IndexedDB). Thử Clear site data, dùng Incognito, hoặc tắt extensions (TronLink). Xem console.');
         } else {
           let hint = '';
           if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nThêm domain vào Firebase Console → Authentication → Authorized domains.';

@@ -1,7 +1,12 @@
 // src/lib/firebase.js
-// Module duy nhất để khởi tạo Firebase và export auth, db, provider
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-import { getAuth, GoogleAuthProvider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import {
+  initializeAuth,
+  getAuth,
+  GoogleAuthProvider,
+  browserLocalPersistence,
+  inMemoryPersistence
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import { getFirestore } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -15,9 +20,29 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+
+// Try browser persistence first (IndexedDB-backed), fallback to in-memory if init fails.
+let auth;
+try {
+  auth = initializeAuth(app, { persistence: browserLocalPersistence });
+  console.log('Firebase Auth: initialized with browserLocalPersistence');
+} catch (err) {
+  console.warn('Firebase Auth: browserLocalPersistence init failed, falling back to inMemoryPersistence', err);
+  try {
+    auth = initializeAuth(app, { persistence: inMemoryPersistence });
+    console.log('Firebase Auth: initialized with inMemoryPersistence (fallback)');
+  } catch (err2) {
+    console.error('Firebase Auth: fallback init also failed — using getAuth()', err2);
+    auth = getAuth(app);
+  }
+}
+
 export const provider = new GoogleAuthProvider();
 export const db = getFirestore(app);
+export { auth, app as default };
 
-// (tuỳ chọn) export default app;
-export default app;
+// Debug helper (remove if you want)
+if (typeof window !== 'undefined') {
+  window.__MYNOTES_FB = { app, auth, db, provider };
+  console.log('DEBUG: window.__MYNOTES_FB available');
+}

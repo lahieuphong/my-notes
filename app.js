@@ -1,9 +1,11 @@
 // src/app.js (type="module")
-// FULL app.js — dùng cùng phiên bản SDK với src/lib/firebase.js (10.7.1)
+// Full app logic: local + firestore sync, robust auth, index hint, avoids SDK mixups
 import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import {
   collection,
   addDoc,
+  updateDoc,
+  doc,
   getDocs,
   query,
   where,
@@ -15,36 +17,38 @@ import { auth, db, provider } from './lib/firebase.js';
 
 (() => {
   const LS_KEY = 'notes-app-v1';
-  let notes = [];
+  let notes = []; // each note: { id: localId, title, content, created, updated, firestoreId? }
   let activeId = null;
   let currentUser = null;
+  let signInInProgress = false;
 
-  // Elements (giữ nguyên id như trong index.html)
-  const notesList = document.getElementById('notesList');
-  const qInput = document.getElementById('q');
-  const btnNew = document.getElementById('btnNew');
-  const btnSave = document.getElementById('btnSave');
-  const btnDelete = document.getElementById('btnDelete');
-  const btnClearAll = document.getElementById('btnClearAll');
-  const fileImport = document.getElementById('fileImport');
-  const editor = document.getElementById('editor');
-  const emptyState = document.getElementById('emptyState');
-  const titleEl = document.getElementById('title');
-  const contentEl = document.getElementById('content');
-  const metaEl = document.getElementById('meta');
+  // Elements (if any missing, script will not fail)
+  const el = id => document.getElementById(id);
+  const notesList = el('notesList');
+  const qInput = el('q');
+  const btnNew = el('btnNew');
+  const btnSave = el('btnSave');
+  const btnDelete = el('btnDelete');
+  const btnClearAll = el('btnClearAll');
+  const fileImport = el('fileImport');
+  const editor = el('editor');
+  const emptyState = el('emptyState');
+  const titleEl = el('title');
+  const contentEl = el('content');
+  const metaEl = el('meta');
 
-  const btnSignIn = document.getElementById('btnSignIn');
-  const btnSignOut = document.getElementById('btnSignOut');
-  const syncStatus = document.getElementById('syncStatus');
+  const btnSignIn = el('btnSignIn');
+  const btnSignOut = el('btnSignOut');
+  const syncStatus = el('syncStatus');
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6) }
 
-  // ---------- Local storage helpers ----------
+  // ---------- Local helpers ----------
   function loadNotesLocal(){
     try {
       const raw = localStorage.getItem(LS_KEY);
       notes = raw ? JSON.parse(raw) : [];
-    } catch (e) {
+    } catch(e) {
       console.warn('loadNotesLocal parse error', e);
       notes = [];
     }
@@ -52,31 +56,44 @@ import { auth, db, provider } from './lib/firebase.js';
   function saveNotesLocal(){ localStorage.setItem(LS_KEY, JSON.stringify(notes)); }
 
   // ---------- Firestore helpers ----------
+  // Save or update a single note: if it has firestoreId -> update, else add
   async function saveNoteToFirestore(note){
-    if(!db || !currentUser){
+    if(!db || !currentUser) {
       console.warn('No db or user — skip cloud save');
       return false;
     }
-    try{
+    try {
+      // payload includes localId so we can correlate later
       const payload = {
         title: note.title || '',
         content: note.content || '',
         created: note.created || Date.now(),
         updated: note.updated || Date.now(),
         userId: currentUser.uid,
+        localId: note.id,
         createdAt: serverTimestamp()
       };
-      const docRef = await addDoc(collection(db, 'notes'), payload);
-      console.log('Saved note to firestore, id=', docRef.id);
+
+      if(note.firestoreId){
+        const ref = doc(db, 'notes', note.firestoreId);
+        await updateDoc(ref, payload);
+        console.log('Updated note on firestore:', note.firestoreId);
+      } else {
+        const ref = await addDoc(collection(db, 'notes'), payload);
+        note.firestoreId = ref.id; // save mapping locally
+        saveNotesLocal(); // persist mapping
+        console.log('Added note to firestore:', ref.id);
+      }
       return true;
-    }catch(e){
+    } catch(e) {
       console.error('saveNoteToFirestore error', e);
-      // if it's an index error, the developer console will show a link
       if(e && e.message && e.message.includes('requires an index')){
-        // extract link if present
         const match = e.message.match(/(https?:\/\/[^\s)]+)/);
         if(match) console.info('Create index here:', match[1]);
-        alert('Lưu cloud thất bại: Firestore yêu cầu tạo index. Kiểm tra console để mở link tạo index.');
+        alert('Lưu cloud thất bại: Firestore yêu cầu tạo index. Mở console để click link tạo index hoặc vào Firebase Console > Indexes.');
+      } else if(e && e.code && e.code.startsWith('app/')) {
+        // IndexedDB errors often surface as app/idb-set etc
+        alert('Lưu cloud thất bại do IndexedDB (trình duyệt). Thử Clear site data / dùng Incognito hoặc tắt extensions.');
       }
       return false;
     }
@@ -84,32 +101,42 @@ import { auth, db, provider } from './lib/firebase.js';
 
   async function loadNotesFromFirestore(uid){
     if(!db) return false;
-    try{
-      // Query: where userId == uid and order by updated asc
-      const q = query(collection(db, 'notes'), where('userId', '==', uid), orderBy('updated', 'asc'));
+    try {
+      const q = query(collection(db, 'notes'), where('userId','==',uid), orderBy('updated','asc'));
       const snap = await getDocs(q);
-      notes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      notes = snap.docs.map(d => {
+        const data = d.data();
+        // prefer localId if available (so user's local id preserved), otherwise fallback to firestore id
+        return {
+          id: data.localId || d.id,
+          title: data.title || '',
+          content: data.content || '',
+          created: data.created || Date.now(),
+          updated: data.updated || Date.now(),
+          firestoreId: d.id
+        };
+      });
       saveNotesLocal();
       console.log('Loaded notes from firestore, count=', notes.length);
       return true;
-    }catch(e){
+    } catch(e) {
       console.error('loadNotesFromFirestore error', e);
-      if(e && e.message && e.message.includes('requires an index')){
-        // show friendly hint: console also contains full link
+      if(e && e.message && e.message.includes('requires an index')) {
         const match = e.message.match(/(https?:\/\/[^\s)]+)/);
         if(match) {
-          const link = match[1];
-          console.info('Firestore requires composite index. Create it here:', link);
-          alert('Firestore: Query requires a composite index. Mở console để click link tạo index hoặc copy-paste link kiểm soát.');
+          console.info('Firestore requires composite index. Create it here:', match[1]);
+          alert('Firestore: Query requires a composite index. Mở console để click link tạo index hoặc vào Firebase Console -> Indexes.');
         } else {
-          alert('Firestore: Query requires a composite index. Mở Firebase Console -> Indexes để tạo.');
+          alert('Firestore: Query requires a composite index. Đi tới Firebase Console -> Indexes để tạo.');
         }
+      } else if(e && e.code && e.code.startsWith('app/')) {
+        alert('Lỗi IndexedDB khi đọc Firestore. Thử Clear site data hoặc dùng Incognito (tắt extensions).');
       }
       return false;
     }
   }
 
-  // ---------- Utilities ----------
+  // ---------- UI utilities ----------
   function escapeHtml(s){
     return (s+'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' })[c]);
   }
@@ -123,8 +150,8 @@ import { auth, db, provider } from './lib/firebase.js';
       return (n.title||'').toLowerCase().includes(f) || (n.content||'').toLowerCase().includes(f);
     });
 
-    if(shown.length===0){
-      notesList.innerHTML = '<div class="empty">Không có ghi chú nào.</div>';
+    if(shown.length === 0){
+      notesList.innerHTML = '<div class="empty">Chọn một ghi chú bên trái hoặc tạo mới để bắt đầu.</div>';
       return;
     }
 
@@ -139,53 +166,61 @@ import { auth, db, provider } from './lib/firebase.js';
     }
   }
 
+  function findById(localId){
+    return notes.find(n => n.id === localId);
+  }
+
   function openNote(id){
     activeId = id;
-    const n = notes.find(x=>x.id===id);
+    const n = findById(id);
     if(!n) return;
-    titleEl.value = n.title||'';
-    contentEl.value = n.content||'';
-    metaEl.textContent = `Tạo: ${new Date(n.created).toLocaleString()} • Cập nhật: ${new Date(n.updated||n.created).toLocaleString()}`;
-    editor.style.display = '';
-    emptyState.style.display = 'none';
+    if(titleEl) titleEl.value = n.title || '';
+    if(contentEl) contentEl.value = n.content || '';
+    if(metaEl) metaEl.textContent = `Tạo: ${new Date(n.created).toLocaleString()} • Cập nhật: ${new Date(n.updated||n.created).toLocaleString()}`;
+    if(editor) editor.style.display = '';
+    if(emptyState) emptyState.style.display = 'none';
   }
 
   function createNote(){
     const now = Date.now();
-    const n = { id: uid(), title:'', content:'', created: now, updated: now };
+    const n = { id: uid(), title:'', content:'', created: now, updated: now, firestoreId: undefined };
     notes.push(n);
     saveNotesLocal();
-    renderNotes(qInput.value);
+    renderNotes(qInput ? qInput.value : '');
     openNote(n.id);
   }
 
   async function saveActiveNote(){
     if(!activeId) return;
-    const n = notes.find(x=>x.id===activeId);
+    const n = findById(activeId);
     if(!n) return;
-    n.title = titleEl.value;
-    n.content = contentEl.value;
+    if(titleEl) n.title = titleEl.value;
+    if(contentEl) n.content = contentEl.value;
     n.updated = Date.now();
     saveNotesLocal();
+    // cloud save only if logged in
     if(currentUser){
       const ok = await saveNoteToFirestore(n);
-      syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ';
+      if(syncStatus) syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ';
     }
-    renderNotes(qInput.value);
-    metaEl.textContent = `Tạo: ${new Date(n.created).toLocaleString()} • Cập nhật: ${new Date(n.updated).toLocaleString()}`;
-    btnSave.textContent = 'Đã lưu';
-    setTimeout(()=> btnSave.textContent = 'Lưu', 700);
+    renderNotes(qInput ? qInput.value : '');
+    if(metaEl) metaEl.textContent = `Tạo: ${new Date(n.created).toLocaleString()} • Cập nhật: ${new Date(n.updated).toLocaleString()}`;
+    if(btnSave){
+      btnSave.textContent = 'Đã lưu';
+      setTimeout(()=> btnSave.textContent = 'Lưu', 700);
+    }
   }
 
   function deleteActiveNote(){
     if(!activeId) return;
     if(!confirm('Xác nhận xóa ghi chú này?')) return;
-    notes = notes.filter(x=>x.id!==activeId);
+    notes = notes.filter(x => x.id !== activeId);
     saveNotesLocal();
     activeId = null;
-    editor.style.display = 'none';
-    emptyState.style.display = '';
-    renderNotes(qInput.value);
+    if(editor) editor.style.display = 'none';
+    if(emptyState) emptyState.style.display = '';
+    renderNotes(qInput ? qInput.value : '');
+    // NOTE: we don't delete from Firestore automatically. Could add removal if desired.
   }
 
   function clearAll(){
@@ -193,15 +228,15 @@ import { auth, db, provider } from './lib/firebase.js';
     notes = [];
     saveNotesLocal();
     activeId = null;
-    editor.style.display = 'none';
-    emptyState.style.display = '';
+    if(editor) editor.style.display = 'none';
+    if(emptyState) emptyState.style.display = '';
     renderNotes();
   }
 
   function importJson(file){
     const r = new FileReader();
     r.onload = ()=>{
-      try{
+      try {
         const parsed = JSON.parse(r.result);
         if(Array.isArray(parsed)){
           const existingIds = new Set(notes.map(n=>n.id));
@@ -217,102 +252,127 @@ import { auth, db, provider } from './lib/firebase.js';
             });
           }
           saveNotesLocal();
-          renderNotes(); alert('Nhập thành công');
+          renderNotes();
+          alert('Nhập thành công');
         } else {
           alert('Tập tin không chứa mảng ghi chú');
         }
-      }catch(e){
+      } catch(e){
         alert('Không thể đọc file: ' + e.message);
       }
     };
     r.readAsText(file);
   }
 
-  // ---------- Auth handlers (with fallback) ----------
-  btnSignIn.onclick = async ()=>{
-    if(!auth){
-      alert('Firebase chưa được cấu hình. Vui lòng kiểm tra src/lib/firebase.js');
-      return;
+  // ---------- Auth handlers (robust) ----------
+  // helper to detect production -> use redirect there
+  const useRedirectByDefault = () => {
+    try {
+      const host = location.hostname;
+      return host !== 'localhost' && host !== '127.0.0.1';
+    } catch(e) {
+      return true;
     }
-    try{
-      await signInWithPopup(auth, provider);
-      console.log('signInWithPopup succeeded (popup).');
-    }catch(e){
-      console.error('signInWithPopup error', e);
-      // nếu popup bị block hoặc internal failure -> thử redirect fallback
-      const popupBlocked = e && (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request' || e.code === 'auth/internal-error');
-      if(popupBlocked){
-        try {
-          console.log('Popup blocked — trying signInWithRedirect fallback');
-          await signInWithRedirect(auth, provider);
-          return;
-        } catch(e2){
-          console.error('signInWithRedirect failed', e2);
-        }
+  };
+
+  if(btnSignIn){
+    btnSignIn.onclick = async () => {
+      if(!auth){
+        alert('Firebase chưa được cấu hình. Kiểm tra src/lib/firebase.js');
+        return;
       }
-      // nếu unauthorized-domain / operation-not-allowed, thông báo rõ
-      let hint = '';
-      if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nLỗi: unauthorized-domain — thêm domain vào Firebase Console -> Authentication -> Authorized domains.';
-      if(e && e.code === 'auth/operation-not-allowed') hint = '\n\nLỗi: operation-not-allowed — bật Google provider trong Firebase Console -> Authentication -> Sign-in method.';
-      alert('Đăng nhập thất bại: ' + (e.message || e.code || e) + hint);
-    }
-  };
+      if(signInInProgress) return;
+      signInInProgress = true;
+      btnSignIn.disabled = true;
 
-  btnSignOut.onclick = async ()=>{
-    if(!auth) return;
-    try{
-      await signOut(auth);
-      console.log('Signed out.');
-    }catch(e){
-      console.error('signOut error', e);
-    }
-  };
+      try {
+        const preferRedirect = useRedirectByDefault();
+        if(!preferRedirect){
+          // try popup on localhost/dev
+          await signInWithPopup(auth, provider);
+          console.log('Signed in with popup');
+        } else {
+          // in production prefer redirect (less likely to be blocked)
+          console.log('Using redirect sign-in (production)');
+          await signInWithRedirect(auth, provider);
+          // redirect will occur -> onAuthStateChanged will run after return
+        }
+      } catch(e) {
+        console.error('Sign-in error', e);
+        // popup-blocked or cancelled -> attempt redirect fallback
+        const popupBlocked = e && (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request' || e.code === 'auth/internal-error');
+        if(popupBlocked){
+          try {
+            console.warn('Popup blocked/cancelled — trying redirect fallback');
+            await signInWithRedirect(auth, provider);
+            return;
+          } catch(e2){
+            console.error('Redirect fallback failed', e2);
+          }
+        }
+        let hint = '';
+        if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nLỗi: unauthorized-domain — hãy thêm domain (vd: lahieuphong.github.io) vào Firebase Console → Authentication → Authorized domains.';
+        if(e && e.code === 'auth/operation-not-allowed') hint = '\n\nLỗi: operation-not-allowed — bật Google Sign-In trong Firebase Console → Authentication → Sign-in method.';
+        alert('Đăng nhập thất bại: ' + (e.message || e.code || e) + hint);
+      } finally {
+        signInInProgress = false;
+        if(btnSignIn) btnSignIn.disabled = false;
+      }
+    };
+  }
 
-  onAuthStateChanged(auth, async (user)=>{
+  if(btnSignOut){
+    btnSignOut.onclick = async () => {
+      try {
+        await signOut(auth);
+        console.log('Signed out.');
+      } catch(e){
+        console.error('signOut error', e);
+      }
+    };
+  }
+
+  // Auth state listener
+  onAuthStateChanged(auth, async (user) => {
     currentUser = user;
     console.log('onAuthStateChanged:', user ? user.uid : null);
     if(user){
-      btnSignIn.style.display = 'none';
-      btnSignOut.style.display = '';
-      syncStatus.textContent = 'Đang đồng bộ...';
+      if(btnSignIn) btnSignIn.style.display = 'none';
+      if(btnSignOut) btnSignOut.style.display = '';
+      if(syncStatus) syncStatus.textContent = 'Đang đồng bộ...';
       loadNotesLocal();
       const ok = await loadNotesFromFirestore(user.uid);
-      syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ, dùng local';
-    }else{
-      btnSignIn.style.display = '';
-      btnSignOut.style.display = 'none';
-      syncStatus.textContent = 'Offline';
+      if(syncStatus) syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ, dùng local';
+    } else {
+      if(btnSignIn) btnSignIn.style.display = '';
+      if(btnSignOut) btnSignOut.style.display = 'none';
+      if(syncStatus) syncStatus.textContent = 'Offline';
       loadNotesLocal();
     }
-    renderNotes(qInput.value);
+    renderNotes(qInput ? qInput.value : '');
   });
 
   // ---------- Events ----------
-  btnNew.onclick = createNote;
-  btnSave.onclick = ()=>{ if(!activeId) createNote(); saveActiveNote(); };
-  btnDelete.onclick = deleteActiveNote;
-  btnClearAll.onclick = clearAll;
-  fileImport.onchange = e=>{ const f = e.target.files && e.target.files[0]; if(f) importJson(f); fileImport.value = '' };
-  qInput.oninput = ()=> renderNotes(qInput.value);
+  if(btnNew) btnNew.onclick = createNote;
+  if(btnSave) btnSave.onclick = ()=>{ if(!activeId) createNote(); saveActiveNote(); };
+  if(btnDelete) btnDelete.onclick = deleteActiveNote;
+  if(btnClearAll) btnClearAll.onclick = clearAll;
+  if(fileImport) fileImport.onchange = e => { const f = e.target.files && e.target.files[0]; if(f) importJson(f); fileImport.value = '' };
+  if(qInput) qInput.oninput = ()=> renderNotes(qInput.value);
 
-  // Use globalThis.addEventListener to avoid possible window shadowing by extensions
-  if (typeof globalThis.addEventListener === 'function') {
-    globalThis.addEventListener('keydown', (e)=>{
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
-    });
-  } else if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('keydown', (e)=>{
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
-      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
-    });
-  }
+  // global keyboard shortcuts (use globalThis to avoid extension shadowing)
+  const keyHandler = (e) => {
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
+  };
+  if(typeof globalThis.addEventListener === 'function') globalThis.addEventListener('keydown', keyHandler);
+  else if(typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('keydown', keyHandler);
 
   // ---------- init ----------
   (()=>{
     loadNotesLocal();
-    if(notes.length===0){
-      notes.push({id:uid(),title:'Chào mừng!',content:'Đây là ghi chú mẫu. Tạo ghi chú mới bằng nút + Ghi chú mới. Dữ liệu lưu cục bộ trong trình duyệt.',created:Date.now(),updated:Date.now()});
+    if(notes.length === 0){
+      notes.push({ id: uid(), title: 'Chào mừng!', content: 'Đây là ghi chú mẫu. Tạo ghi chú mới bằng nút + Ghi chú mới. Dữ liệu lưu cục bộ trong trình duyệt.', created: Date.now(), updated: Date.now() });
       saveNotesLocal();
     }
     renderNotes();

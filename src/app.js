@@ -102,25 +102,30 @@ import { auth, db, provider } from './lib/firebase.js';
   async function loadNotesFromFirestore(uid){
     if(!db) return false;
     try {
-      const q = query(collection(db, 'notes'), where('userId','==',uid), orderBy('updated','asc'));
+      // No server-side orderBy to avoid composite index requirement
+      const q = query(collection(db, 'notes'), where('userId','==', uid));
       const snap = await getDocs(q);
       notes = snap.docs.map(d => {
         const data = d.data();
-        // prefer localId if available (so user's local id preserved), otherwise fallback to firestore id
         return {
           id: data.localId || d.id,
           title: data.title || '',
           content: data.content || '',
-          created: data.created || Date.now(),
-          updated: data.updated || Date.now(),
+          created: data.created || data.createdAt || Date.now(),
+          updated: data.updated || data.updatedAt || Date.now(),
           firestoreId: d.id
         };
       });
+
+      // sort client-side by updated ascending (or descending if you prefer)
+      notes.sort((a,b) => (a.updated || 0) - (b.updated || 0));
+
       saveNotesLocal();
       console.log('Loaded notes from firestore, count=', notes.length);
       return true;
     } catch(e) {
       console.error('loadNotesFromFirestore error', e);
+      // existing error handling left in place
       if(e && e.message && e.message.includes('requires an index')) {
         const match = e.message.match(/(https?:\/\/[^\s)]+)/);
         if(match) {

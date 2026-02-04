@@ -102,7 +102,7 @@ import { auth, db, provider } from './lib/firebase.js';
   async function loadNotesFromFirestore(uid){
     if(!db) return false;
     try {
-      // No server-side orderBy to avoid composite index requirement
+      // không dùng orderBy để tránh cần composite index
       const q = query(collection(db, 'notes'), where('userId','==', uid));
       const snap = await getDocs(q);
       notes = snap.docs.map(d => {
@@ -117,7 +117,7 @@ import { auth, db, provider } from './lib/firebase.js';
         };
       });
 
-      // sort client-side by updated ascending (or descending if you prefer)
+      // sort client-side by updated ascending
       notes.sort((a,b) => (a.updated || 0) - (b.updated || 0));
 
       saveNotesLocal();
@@ -125,7 +125,6 @@ import { auth, db, provider } from './lib/firebase.js';
       return true;
     } catch(e) {
       console.error('loadNotesFromFirestore error', e);
-      // existing error handling left in place
       if(e && e.message && e.message.includes('requires an index')) {
         const match = e.message.match(/(https?:\/\/[^\s)]+)/);
         if(match) {

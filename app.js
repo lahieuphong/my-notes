@@ -1,6 +1,6 @@
 // src/app.js (type="module")
-// LƯU Ý: dùng cùng phiên bản SDK với src/lib/firebase.js
-import { signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+// FULL app.js — dùng cùng phiên bản SDK với src/lib/firebase.js (10.7.1)
+import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
 import {
   collection,
   addDoc,
@@ -11,7 +11,6 @@ import {
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-// Import module config duy nhất
 import { auth, db, provider } from './lib/firebase.js';
 
 (() => {
@@ -20,7 +19,7 @@ import { auth, db, provider } from './lib/firebase.js';
   let activeId = null;
   let currentUser = null;
 
-  // Elements
+  // Elements (giữ nguyên id như trong index.html)
   const notesList = document.getElementById('notesList');
   const qInput = document.getElementById('q');
   const btnNew = document.getElementById('btnNew');
@@ -40,21 +39,22 @@ import { auth, db, provider } from './lib/firebase.js';
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6) }
 
-  // ---------------- Local helpers ----------------
+  // ---------- Local storage helpers ----------
   function loadNotesLocal(){
-    try{
+    try {
       const raw = localStorage.getItem(LS_KEY);
       notes = raw ? JSON.parse(raw) : [];
-    }catch(e){
+    } catch (e) {
+      console.warn('loadNotesLocal parse error', e);
       notes = [];
     }
   }
-  function saveNotesLocal(){ localStorage.setItem(LS_KEY, JSON.stringify(notes)) }
+  function saveNotesLocal(){ localStorage.setItem(LS_KEY, JSON.stringify(notes)); }
 
-  // ---------------- Firestore helpers ----------------
+  // ---------- Firestore helpers ----------
   async function saveNoteToFirestore(note){
     if(!db || !currentUser){
-      console.warn('No db or no user — skip cloud save');
+      console.warn('No db or user — skip cloud save');
       return false;
     }
     try{
@@ -71,6 +71,13 @@ import { auth, db, provider } from './lib/firebase.js';
       return true;
     }catch(e){
       console.error('saveNoteToFirestore error', e);
+      // if it's an index error, the developer console will show a link
+      if(e && e.message && e.message.includes('requires an index')){
+        // extract link if present
+        const match = e.message.match(/(https?:\/\/[^\s)]+)/);
+        if(match) console.info('Create index here:', match[1]);
+        alert('Lưu cloud thất bại: Firestore yêu cầu tạo index. Kiểm tra console để mở link tạo index.');
+      }
       return false;
     }
   }
@@ -78,7 +85,8 @@ import { auth, db, provider } from './lib/firebase.js';
   async function loadNotesFromFirestore(uid){
     if(!db) return false;
     try{
-      const q = query(collection(db, 'notes'), where('userId','==',uid), orderBy('updated','asc'));
+      // Query: where userId == uid and order by updated asc
+      const q = query(collection(db, 'notes'), where('userId', '==', uid), orderBy('updated', 'asc'));
       const snap = await getDocs(q);
       notes = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       saveNotesLocal();
@@ -86,11 +94,22 @@ import { auth, db, provider } from './lib/firebase.js';
       return true;
     }catch(e){
       console.error('loadNotesFromFirestore error', e);
+      if(e && e.message && e.message.includes('requires an index')){
+        // show friendly hint: console also contains full link
+        const match = e.message.match(/(https?:\/\/[^\s)]+)/);
+        if(match) {
+          const link = match[1];
+          console.info('Firestore requires composite index. Create it here:', link);
+          alert('Firestore: Query requires a composite index. Mở console để click link tạo index hoặc copy-paste link kiểm soát.');
+        } else {
+          alert('Firestore: Query requires a composite index. Mở Firebase Console -> Indexes để tạo.');
+        }
+      }
       return false;
     }
   }
 
-  // ---------------- Utilities ----------------
+  // ---------- Utilities ----------
   function escapeHtml(s){
     return (s+'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' })[c]);
   }
@@ -199,15 +218,17 @@ import { auth, db, provider } from './lib/firebase.js';
           }
           saveNotesLocal();
           renderNotes(); alert('Nhập thành công');
-        }else{
+        } else {
           alert('Tập tin không chứa mảng ghi chú');
         }
-      }catch(e){ alert('Không thể đọc file: ' + e.message) }
+      }catch(e){
+        alert('Không thể đọc file: ' + e.message);
+      }
     };
     r.readAsText(file);
   }
 
-  // ---------------- Auth handlers ----------------
+  // ---------- Auth handlers (with fallback) ----------
   btnSignIn.onclick = async ()=>{
     if(!auth){
       alert('Firebase chưa được cấu hình. Vui lòng kiểm tra src/lib/firebase.js');
@@ -215,14 +236,24 @@ import { auth, db, provider } from './lib/firebase.js';
     }
     try{
       await signInWithPopup(auth, provider);
-      console.log('signInWithPopup: popup opened / success (if user selected account)');
+      console.log('signInWithPopup succeeded (popup).');
     }catch(e){
       console.error('signInWithPopup error', e);
-      // show friendly message and hint about common causes
+      // nếu popup bị block hoặc internal failure -> thử redirect fallback
+      const popupBlocked = e && (e.code === 'auth/popup-blocked' || e.code === 'auth/cancelled-popup-request' || e.code === 'auth/internal-error');
+      if(popupBlocked){
+        try {
+          console.log('Popup blocked — trying signInWithRedirect fallback');
+          await signInWithRedirect(auth, provider);
+          return;
+        } catch(e2){
+          console.error('signInWithRedirect failed', e2);
+        }
+      }
+      // nếu unauthorized-domain / operation-not-allowed, thông báo rõ
       let hint = '';
-      if(e.code === 'auth/unauthorized-domain') hint = '\n\nLỗi: unauthorized-domain — kiểm tra Authorized domains trong Firebase Console (thêm domain của bạn, ví dụ lahieuphong.github.io).';
-      if(e.code === 'auth/operation-not-allowed') hint = '\n\nLỗi: operation-not-allowed — bật Google Sign-In trong Firebase Console -> Authentication -> Sign-in method.';
-      if(e.code === 'auth/popup-blocked') hint = '\n\nLỗi: popup-blocked — tắt popup blocker hoặc cho phép popups.';
+      if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nLỗi: unauthorized-domain — thêm domain vào Firebase Console -> Authentication -> Authorized domains.';
+      if(e && e.code === 'auth/operation-not-allowed') hint = '\n\nLỗi: operation-not-allowed — bật Google provider trong Firebase Console -> Authentication -> Sign-in method.';
       alert('Đăng nhập thất bại: ' + (e.message || e.code || e) + hint);
     }
   };
@@ -231,6 +262,7 @@ import { auth, db, provider } from './lib/firebase.js';
     if(!auth) return;
     try{
       await signOut(auth);
+      console.log('Signed out.');
     }catch(e){
       console.error('signOut error', e);
     }
@@ -255,20 +287,28 @@ import { auth, db, provider } from './lib/firebase.js';
     renderNotes(qInput.value);
   });
 
-  // ---------------- Events ----------------
+  // ---------- Events ----------
   btnNew.onclick = createNote;
   btnSave.onclick = ()=>{ if(!activeId) createNote(); saveActiveNote(); };
   btnDelete.onclick = deleteActiveNote;
   btnClearAll.onclick = clearAll;
   fileImport.onchange = e=>{ const f = e.target.files && e.target.files[0]; if(f) importJson(f); fileImport.value = '' };
-
   qInput.oninput = ()=> renderNotes(qInput.value);
-  window.addEventListener('keydown', (e)=>{
-    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
-    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
-  });
 
-  // ---------------- init ----------------
+  // Use globalThis.addEventListener to avoid possible window shadowing by extensions
+  if (typeof globalThis.addEventListener === 'function') {
+    globalThis.addEventListener('keydown', (e)=>{
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
+    });
+  } else if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('keydown', (e)=>{
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
+      if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
+    });
+  }
+
+  // ---------- init ----------
   (()=>{
     loadNotesLocal();
     if(notes.length===0){

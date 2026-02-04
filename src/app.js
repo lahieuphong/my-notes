@@ -279,46 +279,42 @@ import { auth, db, provider } from './lib/firebase.js';
   
   if(btnSignIn){
     btnSignIn.onclick = async () => {
-      if(!auth){
-        alert('Firebase chưa được cấu hình. Kiểm tra src/lib/firebase.js');
+      // Prefer debug object we export from firebase.js
+      const fb = (typeof window !== 'undefined' && window.__MYNOTES_FB) ? window.__MYNOTES_FB : null;
+      console.log('SignIn clicked. fb=', fb);
+      const localAuth = fb ? fb.auth : auth;
+      const localProvider = fb ? fb.provider : provider;
+
+      if(!localAuth || !localProvider){
+        console.error('Auth or provider missing:', { localAuth, localProvider });
+        alert('Đăng nhập thất bại: cấu hình auth chưa sẵn sàng. Xem console để biết chi tiết.');
         return;
       }
+
+      // quick sanity: provider must expose providerId
+      if(typeof localProvider.providerId === 'undefined'){
+        console.error('Invalid provider object:', localProvider);
+        alert('Đăng nhập thất bại: provider không hợp lệ. Xem console.');
+        return;
+      }
+
       if(signInInProgress) return;
       signInInProgress = true;
       btnSignIn.disabled = true;
 
       try {
-        console.log('Attempting signInWithPopup (preferred).');
-        await signInWithPopup(auth, provider);
+        console.log('Attempting signInWithPopup', {providerId: localProvider.providerId});
+        await signInWithPopup(localAuth, localProvider);
         console.log('Signed in with popup');
       } catch(e) {
-        console.error('DEBUG sign-in error (popup):', e);
+        console.error('Sign-in error (popup):', e);
+        // existing fallback / messages
         if(e && e.code === 'auth/popup-closed-by-user') {
-          alert('Popup bị đóng — thử lại hoặc mở trang ở Incognito.');
-          return;
-        }
-        const popupBlocked = e && (
-          e.code === 'auth/popup-blocked' ||
-          e.code === 'auth/cancelled-popup-request' ||
-          e.code === 'auth/internal-error'
-        );
-        if(popupBlocked) {
-          try {
-            console.warn('Popup blocked — trying redirect fallback');
-            await signInWithRedirect(auth, provider);
-            return;
-          } catch(e2) {
-            console.error('Redirect fallback failed', e2);
-          }
-        }
-
-        if(e && e.code && e.code.startsWith('app/')) {
-          alert('Lỗi Auth (IndexedDB). Thử Clear site data, dùng Incognito, hoặc tắt extensions (TronLink). Xem console.');
+          alert('Popup bị đóng — thử lại.');
+        } else if(e && e.code && e.code.startsWith('app/')) {
+          alert('Lỗi khởi tạo Auth (IndexedDB). Thử Clear site data hoặc mở Incognito, hoặc tắt extensions.');
         } else {
-          let hint = '';
-          if(e && e.code === 'auth/unauthorized-domain') hint = '\n\nThêm domain vào Firebase Console → Authentication → Authorized domains.';
-          if(e && e.code === 'auth/operation-not-allowed') hint = '\n\nBật Google Sign-In trong Firebase Console → Authentication → Sign-in method.';
-          alert('Đăng nhập thất bại: ' + (e.message || e.code || e) + hint);
+          alert('Đăng nhập thất bại: ' + (e.message || e.code || e));
         }
       } finally {
         signInInProgress = false;

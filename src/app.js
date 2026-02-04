@@ -279,46 +279,28 @@ import { auth, db, provider } from './lib/firebase.js';
   
   if(btnSignIn){
     btnSignIn.onclick = async () => {
-      // Prefer debug object we export from firebase.js
       const fb = (typeof window !== 'undefined' && window.__MYNOTES_FB) ? window.__MYNOTES_FB : null;
-      console.log('SignIn clicked. fb=', fb);
-      const localAuth = fb ? fb.auth : auth;
-      const localProvider = fb ? fb.provider : provider;
+      const localAuth = fb ? fb.auth : (typeof auth !== 'undefined' ? auth : null);
+      const localProvider = fb ? fb.provider : (typeof provider !== 'undefined' ? provider : null);
+
+      console.log('SignIn click debug:', { localAuth, localProvider });
 
       if(!localAuth || !localProvider){
-        console.error('Auth or provider missing:', { localAuth, localProvider });
-        alert('Đăng nhập thất bại: cấu hình auth chưa sẵn sàng. Xem console để biết chi tiết.');
+        console.error('Auth or provider missing - aborting sign-in', { localAuth, localProvider });
+        alert('Đăng nhập thất bại: cấu hình auth chưa sẵn sàng. Mở console để xem chi tiết.');
         return;
       }
-
-      // quick sanity: provider must expose providerId
       if(typeof localProvider.providerId === 'undefined'){
-        console.error('Invalid provider object:', localProvider);
+        console.error('Invalid provider object', localProvider);
         alert('Đăng nhập thất bại: provider không hợp lệ. Xem console.');
         return;
       }
 
-      if(signInInProgress) return;
-      signInInProgress = true;
-      btnSignIn.disabled = true;
-
       try {
-        console.log('Attempting signInWithPopup', {providerId: localProvider.providerId});
         await signInWithPopup(localAuth, localProvider);
-        console.log('Signed in with popup');
       } catch(e) {
         console.error('Sign-in error (popup):', e);
-        // existing fallback / messages
-        if(e && e.code === 'auth/popup-closed-by-user') {
-          alert('Popup bị đóng — thử lại.');
-        } else if(e && e.code && e.code.startsWith('app/')) {
-          alert('Lỗi khởi tạo Auth (IndexedDB). Thử Clear site data hoặc mở Incognito, hoặc tắt extensions.');
-        } else {
-          alert('Đăng nhập thất bại: ' + (e.message || e.code || e));
-        }
-      } finally {
-        signInInProgress = false;
-        if(btnSignIn) btnSignIn.disabled = false;
+        alert('Đăng nhập thất bại: ' + (e.message || e.code || e));
       }
     };
   }

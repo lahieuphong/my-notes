@@ -274,6 +274,7 @@ import { auth, db, provider } from './lib/firebase.js';
       return true;
     }
   };
+  
 
   if(btnSignIn){
     btnSignIn.onclick = async () => {

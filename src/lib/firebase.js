@@ -23,10 +23,10 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const provider = new GoogleAuthProvider();
 
-// Single auth instance for the whole app
+// Single auth instance used across the app
 export const auth = getAuth(app);
 
-// Try to set browser persistence; fallback to inMemory if fails
+// Try browser persistence (IndexedDB-backed), fallback to in-memory if it fails
 (async () => {
   try {
     await setPersistence(auth, browserLocalPersistence);
@@ -38,14 +38,14 @@ export const auth = getAuth(app);
       console.log('Auth persistence: inMemoryPersistence (fallback)');
     } catch (err2) {
       console.error('Both persistence attempts failed', err2);
-      // still export auth (will work without persistence)
+      // we still export auth (getAuth(app)) even if persistence failed
     }
   }
 })();
 
 export default app;
 
-// debug helper (xóa khi production)
+// debug helper (remove on production)
 if (typeof window !== 'undefined') {
   window.__MYNOTES_FB = { app, auth, db, provider };
   console.log('DEBUG: window.__MYNOTES_FB available');

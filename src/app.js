@@ -1,6 +1,11 @@
 // src/app.js (type="module")
-// Full app logic: local + firestore sync, robust auth, index hint, avoids SDK mixups
-import { signInWithPopup, signInWithRedirect, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import {
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  onAuthStateChanged
+} from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
 import {
   collection,
   addDoc,
@@ -9,24 +14,33 @@ import {
   getDocs,
   query,
   where,
-  orderBy,
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
-  
-import { signInWithPopup, signInWithRedirect } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
-import { auth, provider } from './lib/firebase.js'; // đảm bảo import auth từ file trên
-
 import { auth, db, provider } from './lib/firebase.js';
 
+// ---------- small helper to delete IndexedDB via Promise ----------
+function deleteIndexedDb(dbName) {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.deleteDatabase(dbName);
+      req.onsuccess = () => resolve();
+      req.onblocked = () => reject(new Error('delete blocked'));
+      req.onerror = (ev) => reject(ev.target.error || new Error('delete error'));
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// ---------- app state ----------
 (() => {
   const LS_KEY = 'notes-app-v1';
-  let notes = []; // each note: { id: localId, title, content, created, updated, firestoreId? }
+  let notes = [];
   let activeId = null;
   let currentUser = null;
   let signInInProgress = false;
 
-  // Elements (if any missing, script will not fail)
   const el = id => document.getElementById(id);
   const notesList = el('notesList');
   const qInput = el('q');
@@ -47,7 +61,6 @@ import { auth, db, provider } from './lib/firebase.js';
 
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6) }
 
-  // ---------- Local helpers ----------
   function loadNotesLocal(){
     try {
       const raw = localStorage.getItem(LS_KEY);
@@ -59,15 +72,12 @@ import { auth, db, provider } from './lib/firebase.js';
   }
   function saveNotesLocal(){ localStorage.setItem(LS_KEY, JSON.stringify(notes)); }
 
-  // ---------- Firestore helpers ----------
-  // Save or update a single note: if it has firestoreId -> update, else add
   async function saveNoteToFirestore(note){
     if(!db || !currentUser) {
       console.warn('No db or user — skip cloud save');
       return false;
     }
     try {
-      // payload includes localId so we can correlate later
       const payload = {
         title: note.title || '',
         content: note.content || '',
@@ -81,22 +91,17 @@ import { auth, db, provider } from './lib/firebase.js';
       if(note.firestoreId){
         const ref = doc(db, 'notes', note.firestoreId);
         await updateDoc(ref, payload);
-        console.log('Updated note on firestore:', note.firestoreId);
       } else {
         const ref = await addDoc(collection(db, 'notes'), payload);
-        note.firestoreId = ref.id; // save mapping locally
-        saveNotesLocal(); // persist mapping
-        console.log('Added note to firestore:', ref.id);
+        note.firestoreId = ref.id;
+        saveNotesLocal();
       }
       return true;
     } catch(e) {
       console.error('saveNoteToFirestore error', e);
       if(e && e.message && e.message.includes('requires an index')){
-        const match = e.message.match(/(https?:\/\/[^\s)]+)/);
-        if(match) console.info('Create index here:', match[1]);
-        alert('Lưu cloud thất bại: Firestore yêu cầu tạo index. Mở console để click link tạo index hoặc vào Firebase Console > Indexes.');
+        alert('Lưu cloud thất bại: Firestore yêu cầu tạo index. Mở console để xem link tạo index trên Firebase Console.');
       } else if(e && e.code && e.code.startsWith('app/')) {
-        // IndexedDB errors often surface as app/idb-set etc
         alert('Lưu cloud thất bại do IndexedDB (trình duyệt). Thử Clear site data / dùng Incognito hoặc tắt extensions.');
       }
       return false;
@@ -119,22 +124,13 @@ import { auth, db, provider } from './lib/firebase.js';
           firestoreId: d.id
         };
       });
-
-      // sort client-side by updated ascending
       notes.sort((a,b) => (a.updated || 0) - (b.updated || 0));
       saveNotesLocal();
-      console.log('Loaded notes from firestore, count=', notes.length);
       return true;
     } catch(e) {
       console.error('loadNotesFromFirestore error', e);
       if(e && e.message && e.message.includes('requires an index')) {
-        const match = e.message.match(/(https?:\/\/[^\s)]+)/);
-        if(match) {
-          console.info('Create index here:', match[1]);
-          alert('Firestore: Query requires a composite index. Mở console để click link tạo index hoặc vào Firebase Console -> Indexes.');
-        } else {
-          alert('Firestore: Query requires a composite index. Đi tới Firebase Console -> Indexes để tạo.');
-        }
+        alert('Firestore: Query requires a composite index. Check Firebase Console -> Indexes.');
       } else if(e && e.code && e.code.startsWith('app/')) {
         alert('Lỗi IndexedDB khi đọc Firestore. Thử Clear site data hoặc dùng Incognito (tắt extensions).');
       }
@@ -142,7 +138,6 @@ import { auth, db, provider } from './lib/firebase.js';
     }
   }
 
-  // ---------- UI utilities ----------
   function escapeHtml(s){
     return (s+'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' })[c]);
   }
@@ -172,9 +167,7 @@ import { auth, db, provider } from './lib/firebase.js';
     }
   }
 
-  function findById(localId){
-    return notes.find(n => n.id === localId);
-  }
+  function findById(localId){ return notes.find(n => n.id === localId); }
 
   function openNote(id){
     activeId = id;
@@ -204,7 +197,6 @@ import { auth, db, provider } from './lib/firebase.js';
     if(contentEl) n.content = contentEl.value;
     n.updated = Date.now();
     saveNotesLocal();
-    // cloud save only if logged in
     if(currentUser){
       const ok = await saveNoteToFirestore(n);
       if(syncStatus) syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ';
@@ -226,7 +218,6 @@ import { auth, db, provider } from './lib/firebase.js';
     if(editor) editor.style.display = 'none';
     if(emptyState) emptyState.style.display = '';
     renderNotes(qInput ? qInput.value : '');
-    // NOTE: we don't delete from Firestore automatically. Could add removal if desired.
   }
 
   function clearAll(){
@@ -270,21 +261,9 @@ import { auth, db, provider } from './lib/firebase.js';
     r.readAsText(file);
   }
 
-  // ---------- Auth handlers (robust) ----------
-  // helper to detect production -> use redirect there
-  const useRedirectByDefault = () => {
-    try {
-      const host = location.hostname;
-      return host !== 'localhost' && host !== '127.0.0.1';
-    } catch(e) {
-      return true;
-    }
-  };
-
-
+  // ---------- Auth handlers ----------
   if (btnSignIn) {
     btnSignIn.onclick = async () => {
-      // tránh gọi lại nhiều lần
       if (signInInProgress) return;
       signInInProgress = true;
 
@@ -294,7 +273,6 @@ import { auth, db, provider } from './lib/firebase.js';
           return;
         }
 
-        // debug info
         console.log('SignIn click debug:', { auth, provider });
 
         try {
@@ -302,29 +280,31 @@ import { auth, db, provider } from './lib/firebase.js';
           console.log('signInWithPopup ok');
         } catch (err) {
           console.warn('Popup sign-in failed:', err);
-          // show detailed error for debugging
           console.log('err.code=', err?.code, 'err.message=', err?.message);
 
-          // If IndexedDB persistence error happens, fall back to inMemory and retry via redirect
-          if (err && typeof err.code === 'string' && err.code.startsWith('app/idb')) {
-            console.warn('Detected IndexedDB (app/idb) error — attempting to use inMemoryPersistence and redirect fallback.');
-            // set persistence to in-memory (we already attempted in firebase.js, but try again)
-            try {
-              // dynamic import setPersistence + inMemoryPersistence if needed
-              const { setPersistence, inMemoryPersistence } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
-              await setPersistence(auth, inMemoryPersistence);
-              console.log('Switched to inMemoryPersistence');
-              // fallback to redirect (popup likely blocked or idb issue)
-              await signInWithRedirect(auth, provider);
-              return;
-            } catch (e2) {
-              console.error('Fallback to inMemory + redirect failed', e2);
-              alert('Đăng nhập thất bại do lỗi lưu trữ trình duyệt. Thử Clear site data hoặc dùng cửa sổ Incognito.');
+          // IndexedDB / persistence error -> offer to clear firebaseLocalStorageDb
+          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || err.message?.includes('IndexedDB'))) {
+            const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Cho phép xóa cache Firebase (firebaseLocalStorageDb) để khôi phục? (dữ liệu local có thể mất).');
+            if (doClear) {
+              try {
+                await deleteIndexedDb('firebaseLocalStorageDb');
+                // also try to delete fallback name some browsers use
+                try { await deleteIndexedDb('firebaseLocalStorage'); } catch(e){}
+                alert('Đã xóa cache. Tải lại trang để thử đăng nhập lại.');
+                location.reload();
+                return;
+              } catch (e2) {
+                console.error('Delete IndexedDB failed', e2);
+                alert('Không thể xóa IndexedDB tự động. Vui lòng Clear site data bằng DevTools -> Application -> Clear storage.');
+                return;
+              }
+            } else {
+              alert('Bạn đã hủy xóa cache. Thử đăng nhập ở cửa sổ ẩn danh (Incognito) hoặc xóa site data thủ công.');
               return;
             }
           }
 
-          // If popup blocked or environment not supported, try redirect
+          // Common popup issues -> fallback to redirect
           const needRedirect = err && (
             err.code === 'auth/popup-blocked' ||
             err.code === 'auth/popup-closed-by-user' ||
@@ -361,48 +341,38 @@ import { auth, db, provider } from './lib/firebase.js';
     };
   }
 
-  // Auth state listener
+  // Auth listener using the same exported `auth`
   onAuthStateChanged(auth, async (user) => {
     console.log("onAuthStateChanged:", user?.uid ?? null);
 
     currentUser = user;
 
-    // ===== UI: Login / Logout =====
     if (btnSignIn) {
       btnSignIn.style.display = user ? 'none' : '';
       btnSignIn.disabled = !!user;
       btnSignIn.textContent = user ? 'Đã đăng nhập' : 'Đăng nhập Google';
     }
-
     if (btnSignOut) {
       btnSignOut.style.display = user ? '' : 'none';
     }
-
-    // ===== Sync status =====
     if (syncStatus) {
       syncStatus.textContent = user ? 'Đang đồng bộ...' : 'Offline';
     }
 
-    // ===== Data loading =====
     loadNotesLocal();
 
     if (user) {
       try {
         const ok = await loadNotesFromFirestore(user.uid);
         if (syncStatus) {
-          syncStatus.textContent = ok
-            ? 'Đồng bộ (cloud)'
-            : 'Lỗi đồng bộ, dùng local';
+          syncStatus.textContent = ok ? 'Đồng bộ (cloud)' : 'Lỗi đồng bộ, dùng local';
         }
       } catch (err) {
         console.error('Firestore sync error:', err);
-        if (syncStatus) {
-          syncStatus.textContent = 'Lỗi đồng bộ, dùng local';
-        }
+        if (syncStatus) syncStatus.textContent = 'Lỗi đồng bộ, dùng local';
       }
     }
 
-    // ===== Render =====
     renderNotes(qInput ? qInput.value : '');
   });
 
@@ -414,7 +384,6 @@ import { auth, db, provider } from './lib/firebase.js';
   if(fileImport) fileImport.onchange = e => { const f = e.target.files && e.target.files[0]; if(f) importJson(f); fileImport.value = '' };
   if(qInput) qInput.oninput = ()=> renderNotes(qInput.value);
 
-  // global keyboard shortcuts (use globalThis to avoid extension shadowing)
   const keyHandler = (e) => {
     if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='n'){ e.preventDefault(); createNote(); }
     if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='s'){ e.preventDefault(); saveActiveNote(); }
@@ -422,7 +391,6 @@ import { auth, db, provider } from './lib/firebase.js';
   if(typeof globalThis.addEventListener === 'function') globalThis.addEventListener('keydown', keyHandler);
   else if(typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('keydown', keyHandler);
 
-  // ---------- init ----------
   (()=>{
     loadNotesLocal();
     if(notes.length === 0){
@@ -432,4 +400,4 @@ import { auth, db, provider } from './lib/firebase.js';
     renderNotes();
   })();
 
-})();
+})(); // end IIFE

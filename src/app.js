@@ -361,7 +361,6 @@ function deleteIndexedDb(dbName) {
     };
   }
 
-
   onAuthStateChanged(auth, async (user) => {
     console.log("onAuthStateChanged:", user?.uid ?? null);
 

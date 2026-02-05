@@ -4,6 +4,7 @@ import {
   getAuth,
   setPersistence,
   browserLocalPersistence,
+  browserSessionPersistence,
   inMemoryPersistence,
   GoogleAuthProvider
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
@@ -26,27 +27,46 @@ export const provider = new GoogleAuthProvider();
 // Single auth instance used across the app
 export const auth = getAuth(app);
 
-// Try browser persistence (IndexedDB-backed), fallback to in-memory if it fails
+// persistence status for debugging: 'local' | 'session' | 'memory' | 'none'
+let _persistenceStatus = 'unknown';
+
 (async () => {
+  // Try local first, then session, then in-memory
   try {
     await setPersistence(auth, browserLocalPersistence);
+    _persistenceStatus = 'local';
     console.log('Auth persistence: browserLocalPersistence');
-  } catch (err) {
-    console.warn('setPersistence(browserLocalPersistence) failed, falling back to inMemoryPersistence', err);
+  } catch (errLocal) {
+    console.warn('setPersistence(browserLocalPersistence) failed:', errLocal);
+
     try {
-      await setPersistence(auth, inMemoryPersistence);
-      console.log('Auth persistence: inMemoryPersistence (fallback)');
-    } catch (err2) {
-      console.error('Both persistence attempts failed', err2);
-      // we still export auth (getAuth(app)) even if persistence failed
+      await setPersistence(auth, browserSessionPersistence);
+      _persistenceStatus = 'session';
+      console.log('Auth persistence: browserSessionPersistence (fallback)');
+    } catch (errSession) {
+      console.warn('setPersistence(browserSessionPersistence) failed:', errSession);
+
+      try {
+        await setPersistence(auth, inMemoryPersistence);
+        _persistenceStatus = 'memory';
+        console.log('Auth persistence: inMemoryPersistence (final fallback)');
+      } catch (errMemory) {
+        _persistenceStatus = 'none';
+        console.error('All persistence attempts failed', errMemory);
+      }
+    }
+  } finally {
+    // expose for debug (remove in production if you want)
+    if (typeof window !== 'undefined') {
+      window.__MYNOTES_FB = window.__MYNOTES_FB || {};
+      window.__MYNOTES_FB.persistence = _persistenceStatus;
+      window.__MYNOTES_FB.app = app;
+      window.__MYNOTES_FB.auth = auth;
+      window.__MYNOTES_FB.db = db;
+      window.__MYNOTES_FB.provider = provider;
+      console.log('DEBUG: window.__MYNOTES_FB available', window.__MYNOTES_FB.persistence);
     }
   }
 })();
 
 export default app;
-
-// debug helper (remove on production)
-if (typeof window !== 'undefined') {
-  window.__MYNOTES_FB = { app, auth, db, provider };
-  console.log('DEBUG: window.__MYNOTES_FB available');
-}

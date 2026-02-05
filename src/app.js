@@ -283,6 +283,7 @@ function pollPersistenceUI() {
 // ---------- Auth UI handlers ----------
 
 // Sign in: redirect-only (more reliable on GitHub Pages + extensions)
+// robust signin handler: try popup first, fallback to redirect, show friendly timeout hint
 if (btnSignIn) {
   btnSignIn.onclick = async () => {
     if (signInInProgress) return;
@@ -292,8 +293,8 @@ if (btnSignIn) {
     btnSignIn.textContent = 'Đang mở đăng nhập...';
     btnSignIn.disabled = true;
 
-    // show friendly fallback hint after 3s if nothing happened
-    const fallbackTimer = setTimeout(() => {
+    // helper to show hint to user
+    function showSignInHint() {
       let info = document.getElementById('signInInfo');
       if (!info) {
         info = document.createElement('div');
@@ -301,7 +302,9 @@ if (btnSignIn) {
         info.style.marginTop = '8px';
         info.style.fontSize = '13px';
         info.style.color = 'var(--muted)';
-        (btnSignIn.parentElement || document.body).appendChild(info);
+        // append near buttons if possible
+        const container = btnSignIn.parentElement || document.body;
+        container.appendChild(info);
       }
       info.innerHTML = `
         Nếu trang đăng nhập không mở, thử:
@@ -311,18 +314,51 @@ if (btnSignIn) {
           <li>Hoặc thử đăng nhập trên tab/chrome khác</li>
         </ul>
       `;
+    }
+
+    // set a fallback timer: if nothing happened in 3s, show hint
+    const hintTimer = setTimeout(() => {
+      showSignInHint();
     }, 3000);
 
     try {
-      console.log('SignIn click (redirect) debug:', { auth, provider });
-      await signInWithRedirect(auth, provider);
-      // If redirect started, browser will navigate away — code after await won't run.
-    } catch (err) {
-      console.error('signInWithRedirect failed', err);
-      alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error') +
-            '\nThử mở tab ẩn danh hoặc tắt extensions, sau đó thử lại.');
+      console.log('SignIn click (try popup) debug:', { auth, provider });
+
+      // try popup first — often best UX. If this throws with popup-blocked or COOP problems, fallback below.
+      try {
+        // dynamic import to reuse same firebase auth module (optional)
+        // using popup may throw different codes depending on environment.
+        await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")
+          .then(mod => mod.signInWithPopup(auth, provider));
+        console.log('signInWithPopup ok');
+        return;
+      } catch (popupErr) {
+        console.warn('signInWithPopup failed, will fallback to redirect. err:', popupErr?.code || popupErr?.message || popupErr);
+        // decide fallback is appropriate for common popup/COOP errors
+        const msg = (popupErr && (popupErr.message || '')).toString();
+        if (!/popup-closed-by-user|cancelled-popup-request/i.test(popupErr?.code || '')) {
+          // try redirect fallback
+          try {
+            console.log('Falling back to signInWithRedirect');
+            await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js")
+              .then(mod => mod.signInWithRedirect(auth, provider));
+            // if redirect started browser will navigate away; code here will not continue.
+            return;
+          } catch (redirErr) {
+            console.error('signInWithRedirect failed as fallback:', redirErr);
+            alert('Đăng nhập thất bại: ' + (redirErr.message || redirErr.code || 'Unknown error') +
+                  '\nThử mở trang ở chế độ ẩn danh hoặc tắt extensions.');
+            return;
+          }
+        } else {
+          // user closed popup intentionally - don't fallback automatically
+          console.log('Popup was closed/cancelled by user.');
+          return;
+        }
+      }
     } finally {
-      clearTimeout(fallbackTimer);
+      clearTimeout(hintTimer);
+      // restore UI (if we didn't actually navigate away)
       btnSignIn.textContent = origText;
       btnSignIn.disabled = false;
       signInInProgress = false;

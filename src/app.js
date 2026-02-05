@@ -263,83 +263,30 @@ function deleteIndexedDb(dbName) {
   }
 
   // ---------- Auth handlers ----------
+  // SIGN IN: use redirect-only for better compatibility on GitHub Pages / with extensions
   if (btnSignIn) {
     btnSignIn.onclick = async () => {
       if (signInInProgress) return;
       signInInProgress = true;
 
       try {
+        // If already signed in, do nothing
         if (auth.currentUser) {
           console.log("Already signed in:", auth.currentUser.uid);
           return;
         }
 
-        console.log('SignIn click debug:', { auth, provider });
+        console.log('SignIn click (redirect) debug:', { auth, provider });
 
-        // Try popup first, fallback to redirect on a wide range of errors
+        // Use redirect auth flow (less flaky than popup in many environments)
         try {
-          await signInWithPopup(auth, provider);
-          console.log('signInWithPopup ok');
-          return;
+          await signInWithRedirect(auth, provider);
+          // The page will navigate away to Google and back; onAuthStateChanged will handle the rest.
         } catch (err) {
-          console.warn('Popup sign-in failed:', err?.code, err?.message);
-
-          // Detect common conditions where popup is unusable:
-          // - explicit firebase popup-blocked codes
-          // - extension messaging errors (e.g. "Could not establish connection")
-          // - Cross-Origin-Opener-Policy / COOP related messages
-          // - generic environment not supporting popups
-          const msg = (err && (err.message || '')).toString();
-          const code = (err && err.code) || '';
-
-          const popupBlockedCodes = new Set([
-            'auth/popup-blocked',
-            'auth/popup-closed-by-user',
-            'auth/operation-not-supported-in-this-environment',
-            'auth/cancelled-popup-request'
-          ]);
-
-          const shouldRedirect =
-            popupBlockedCodes.has(code) ||
-            /opener|Cross-Origin-Opener-Policy|Could not establish connection|Receiving end does not exist|IndexedDB|blocked/i.test(msg);
-
-          // If storage issues (IndexedDB) detected, offer clear DB flow first (preserve old behavior)
-          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || msg.includes('IndexedDB'))) {
-            const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Xóa cache Firebase (firebaseLocalStorageDb) và reload trang? (có thể mất cache local).');
-            if (doClear) {
-              try {
-                await deleteIndexedDb('firebaseLocalStorageDb');
-                try { await deleteIndexedDb('firebaseLocalStorage'); } catch(e){}
-                alert('Đã xóa cache. Trang sẽ reload.');
-                location.reload();
-                return;
-              } catch (e2) {
-                console.error('Delete IndexedDB failed', e2);
-                alert('Không thể xóa IndexedDB tự động. Vui lòng Clear site data thủ công (DevTools → Application → Clear storage).');
-                return;
-              }
-            } else {
-              alert('Bạn đã hủy. Thử đăng nhập trên cửa sổ ẩn danh hoặc tắt extensions.');
-              return;
-            }
-          }
-
-          if (shouldRedirect) {
-            console.log('Falling back to signInWithRedirect due to popup/COOP/extension/storage issue. Err:', code, msg);
-            try {
-              await signInWithRedirect(auth, provider);
-              // redirect will navigate away; stop here
-              return; 
-            } catch (err2) {
-              console.error('Redirect fallback failed', err2);
-              alert('Đăng nhập thất bại: ' + (err2.message || err.message || err2.code || 'Unknown error'));
-              return;
-            }
-          }
-
-          // Otherwise show error
-          alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error'));
-          return;
+          console.error('signInWithRedirect failed', err);
+          // fallback: show user friendly message
+          alert('Đăng nhập qua Google thất bại: ' + (err.message || err.code || 'Unknown error') + '\n' +
+                'Thử mở trang ở chế độ ẩn danh hoặc tắt extensions / adblock.');
         }
       } finally {
         signInInProgress = false;
@@ -355,22 +302,28 @@ function deleteIndexedDb(dbName) {
       } catch (e) {
         console.error('signOut error', e);
         alert('Lỗi khi đăng xuất: ' + (e.message || e.code));
+        return;
       }
 
-      // clear app UI state + localStorage key(s)
+      // Clear app UI state (local notes) but do NOT forcibly delete Firebase IndexedDB or reload.
       try {
         localStorage.removeItem('notes-app-v1');
-        // remove firebase cached DB to avoid bad persistence next sign-in
-        await deleteIndexedDb('firebaseLocalStorageDb').catch(()=>{});
-        await deleteIndexedDb('firebaseLocalStorage').catch(()=>{});
+        // keep firebase DB intact; deleting it can create weird reinit/redirect behaviour
       } catch (e) {
         console.warn('clear after signOut failed', e);
       }
 
-      // fully reload to ensure SDK state resets — necessary on some browser/extension combos
-      location.reload();
+      // Update UI immediately — onAuthStateChanged will also run and update UI accordingly.
+      currentUser = null;
+      if (btnSignIn) { btnSignIn.style.display = ''; btnSignIn.disabled = false; btnSignIn.textContent = 'Đăng nhập Google'; }
+      if (btnSignOut) { btnSignOut.style.display = 'none'; }
+      if (syncStatus) syncStatus.textContent = 'Offline';
+      if (editor) editor.style.display = 'none';
+      if (emptyState) emptyState.style.display = '';
+      renderNotes();
     };
   }
+
 
   onAuthStateChanged(auth, async (user) => {
     console.log("onAuthStateChanged:", user?.uid ?? null);

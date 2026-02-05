@@ -282,13 +282,11 @@ function deleteIndexedDb(dbName) {
           console.warn('Popup sign-in failed:', err);
           console.log('err.code=', err?.code, 'err.message=', err?.message);
 
-          // IndexedDB / persistence error -> offer to clear firebaseLocalStorageDb
           if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || err.message?.includes('IndexedDB'))) {
             const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Cho phép xóa cache Firebase (firebaseLocalStorageDb) để khôi phục? (dữ liệu local có thể mất).');
             if (doClear) {
               try {
                 await deleteIndexedDb('firebaseLocalStorageDb');
-                // also try to delete fallback name some browsers use
                 try { await deleteIndexedDb('firebaseLocalStorage'); } catch(e){}
                 alert('Đã xóa cache. Tải lại trang để thử đăng nhập lại.');
                 location.reload();
@@ -304,7 +302,6 @@ function deleteIndexedDb(dbName) {
             }
           }
 
-          // Common popup issues -> fallback to redirect
           const needRedirect = err && (
             err.code === 'auth/popup-blocked' ||
             err.code === 'auth/popup-closed-by-user' ||
@@ -341,7 +338,6 @@ function deleteIndexedDb(dbName) {
     };
   }
 
-  // Auth listener using the same exported `auth`
   onAuthStateChanged(auth, async (user) => {
     console.log("onAuthStateChanged:", user?.uid ?? null);
 

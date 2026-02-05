@@ -23,24 +23,29 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 export const provider = new GoogleAuthProvider();
+
+// Single auth instance used across the app
 export const auth = getAuth(app);
 
-// persistence status for debug: 'local' | 'session' | 'memory' | 'none'
+// persistence status for debugging: 'local' | 'session' | 'memory' | 'none'
 let _persistenceStatus = 'unknown';
 
 (async () => {
+  // Try local first, then session, then in-memory
   try {
     await setPersistence(auth, browserLocalPersistence);
     _persistenceStatus = 'local';
     console.log('Auth persistence: browserLocalPersistence');
   } catch (errLocal) {
     console.warn('setPersistence(browserLocalPersistence) failed:', errLocal);
+
     try {
       await setPersistence(auth, browserSessionPersistence);
       _persistenceStatus = 'session';
       console.log('Auth persistence: browserSessionPersistence (fallback)');
     } catch (errSession) {
       console.warn('setPersistence(browserSessionPersistence) failed:', errSession);
+
       try {
         await setPersistence(auth, inMemoryPersistence);
         _persistenceStatus = 'memory';
@@ -51,7 +56,7 @@ let _persistenceStatus = 'unknown';
       }
     }
   } finally {
-    // Expose debug object for devtools (safe to remove for production)
+    // expose for debug (remove in production if you want)
     if (typeof window !== 'undefined') {
       window.__MYNOTES_FB = window.__MYNOTES_FB || {};
       window.__MYNOTES_FB.persistence = _persistenceStatus;
@@ -59,7 +64,7 @@ let _persistenceStatus = 'unknown';
       window.__MYNOTES_FB.auth = auth;
       window.__MYNOTES_FB.db = db;
       window.__MYNOTES_FB.provider = provider;
-      console.log('DEBUG: window.__MYNOTES_FB available (persistence=', _persistenceStatus, ')');
+      console.log('DEBUG: window.__MYNOTES_FB available', window.__MYNOTES_FB.persistence);
     }
   }
 })();

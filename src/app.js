@@ -13,6 +13,10 @@ import {
   serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
+  
+import { signInWithPopup, signInWithRedirect } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+import { auth, provider } from './lib/firebase.js'; // đảm bảo import auth từ file trên
+
 import { auth, db, provider } from './lib/firebase.js';
 
 (() => {
@@ -276,23 +280,72 @@ import { auth, db, provider } from './lib/firebase.js';
       return true;
     }
   };
-  
-  if(btnSignIn){
-    btnSignIn.onclick = async () => {
-      const auth = getAuth();
 
-      // 🔒 ĐANG LOGIN RỒI → KHÔNG GỌI signInWithPopup
-      if (auth.currentUser) {
-        console.log("Already signed in:", auth.currentUser.uid);
-        return;
-      }
+
+  if (btnSignIn) {
+    btnSignIn.onclick = async () => {
+      // tránh gọi lại nhiều lần
+      if (signInInProgress) return;
+      signInInProgress = true;
 
       try {
-        console.log("SignIn click debug:", auth, provider);
-        await signInWithPopup(auth, provider);
-      } catch (err) {
-        console.error("Sign-in error (popup):", err);
-        alert("Đăng nhập thất bại: " + err.code);
+        if (auth.currentUser) {
+          console.log("Already signed in:", auth.currentUser.uid);
+          return;
+        }
+
+        // debug info
+        console.log('SignIn click debug:', { auth, provider });
+
+        try {
+          await signInWithPopup(auth, provider);
+          console.log('signInWithPopup ok');
+        } catch (err) {
+          console.warn('Popup sign-in failed:', err);
+          // show detailed error for debugging
+          console.log('err.code=', err?.code, 'err.message=', err?.message);
+
+          // If IndexedDB persistence error happens, fall back to inMemory and retry via redirect
+          if (err && typeof err.code === 'string' && err.code.startsWith('app/idb')) {
+            console.warn('Detected IndexedDB (app/idb) error — attempting to use inMemoryPersistence and redirect fallback.');
+            // set persistence to in-memory (we already attempted in firebase.js, but try again)
+            try {
+              // dynamic import setPersistence + inMemoryPersistence if needed
+              const { setPersistence, inMemoryPersistence } = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js');
+              await setPersistence(auth, inMemoryPersistence);
+              console.log('Switched to inMemoryPersistence');
+              // fallback to redirect (popup likely blocked or idb issue)
+              await signInWithRedirect(auth, provider);
+              return;
+            } catch (e2) {
+              console.error('Fallback to inMemory + redirect failed', e2);
+              alert('Đăng nhập thất bại do lỗi lưu trữ trình duyệt. Thử Clear site data hoặc dùng cửa sổ Incognito.');
+              return;
+            }
+          }
+
+          // If popup blocked or environment not supported, try redirect
+          const needRedirect = err && (
+            err.code === 'auth/popup-blocked' ||
+            err.code === 'auth/popup-closed-by-user' ||
+            err.code === 'auth/operation-not-supported-in-this-environment' ||
+            err.code === 'auth/cancelled-popup-request'
+          );
+
+          if (needRedirect) {
+            try {
+              await signInWithRedirect(auth, provider);
+              return;
+            } catch (err2) {
+              console.error('Redirect sign-in failed too', err2);
+              alert('Đăng nhập thất bại: ' + (err2.message || err.message));
+            }
+          } else {
+            alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error'));
+          }
+        }
+      } finally {
+        signInInProgress = false;
       }
     };
   }

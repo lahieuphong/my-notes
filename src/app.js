@@ -1,4 +1,4 @@
-// --- Đặt ở đầu src/app.js ---
+// src/app.js
 import {
   signInWithPopup,
   signInWithRedirect,
@@ -276,7 +276,7 @@ function deleteIndexedDb(dbName) {
 
         console.log('SignIn click debug:', { auth, provider });
 
-        // Try popup first, fallback to redirect on common errors
+        // Try popup first, fallback to redirect on a wide range of errors
         try {
           await signInWithPopup(auth, provider);
           console.log('signInWithPopup ok');
@@ -284,15 +284,32 @@ function deleteIndexedDb(dbName) {
         } catch (err) {
           console.warn('Popup sign-in failed:', err?.code, err?.message);
 
-          // If persistence/IndexedDB issues - offer to clear and reload
-          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || (err.message && err.message.includes('IndexedDB')))) {
+          // Detect common conditions where popup is unusable:
+          // - explicit firebase popup-blocked codes
+          // - extension messaging errors (e.g. "Could not establish connection")
+          // - Cross-Origin-Opener-Policy / COOP related messages
+          // - generic environment not supporting popups
+          const msg = (err && (err.message || '')).toString();
+          const code = (err && err.code) || '';
+
+          const popupBlockedCodes = new Set([
+            'auth/popup-blocked',
+            'auth/popup-closed-by-user',
+            'auth/operation-not-supported-in-this-environment',
+            'auth/cancelled-popup-request'
+          ]);
+
+          const shouldRedirect =
+            popupBlockedCodes.has(code) ||
+            /opener|Cross-Origin-Opener-Policy|Could not establish connection|Receiving end does not exist|IndexedDB|blocked/i.test(msg);
+
+          // If storage issues (IndexedDB) detected, offer clear DB flow first (preserve old behavior)
+          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || msg.includes('IndexedDB'))) {
             const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Xóa cache Firebase (firebaseLocalStorageDb) và reload trang? (có thể mất cache local).');
             if (doClear) {
               try {
                 await deleteIndexedDb('firebaseLocalStorageDb');
                 try { await deleteIndexedDb('firebaseLocalStorage'); } catch(e){}
-                // also remove local localStorage key for notes to force reload state if you want:
-                // localStorage.removeItem('notes-app-v1');
                 alert('Đã xóa cache. Trang sẽ reload.');
                 location.reload();
                 return;
@@ -302,31 +319,25 @@ function deleteIndexedDb(dbName) {
                 return;
               }
             } else {
-              alert('Bạn đã hủy. Thử đăng nhập trên cửa sổ ẩn danh hoặc xóa site data thủ công.');
+              alert('Bạn đã hủy. Thử đăng nhập trên cửa sổ ẩn danh hoặc tắt extensions.');
               return;
             }
           }
 
-          // If popup blocked or not supported -> fallback to redirect
-          const needRedirect = err && (
-            err.code === 'auth/popup-blocked' ||
-            err.code === 'auth/popup-closed-by-user' ||
-            err.code === 'auth/operation-not-supported-in-this-environment' ||
-            err.code === 'auth/cancelled-popup-request'
-          );
-
-          if (needRedirect) {
+          if (shouldRedirect) {
+            console.log('Falling back to signInWithRedirect due to popup/COOP/extension/storage issue. Err:', code, msg);
             try {
               await signInWithRedirect(auth, provider);
-              return; // redirect will navigate away
+              // redirect will navigate away; stop here
+              return; 
             } catch (err2) {
               console.error('Redirect fallback failed', err2);
-              alert('Đăng nhập thất bại: ' + (err2.message || err.message));
+              alert('Đăng nhập thất bại: ' + (err2.message || err.message || err2.code || 'Unknown error'));
               return;
             }
           }
 
-          // otherwise show error
+          // Otherwise show error
           alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error'));
           return;
         }

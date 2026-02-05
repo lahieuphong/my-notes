@@ -60,24 +60,6 @@ function deleteIndexedDb(dbName) {
   const btnSignOut = el('btnSignOut');
   const syncStatus = el('syncStatus');
 
-function updatePersistenceStatusUI() {
-  const ss = document.getElementById('syncStatus');
-  if (!ss) return;
-  const p = (window.__MYNOTES_FB && window.__MYNOTES_FB.persistence) || 'unknown';
-  if (p === 'local') {
-    ss.textContent = 'Đồng bộ (cloud)';
-  } else if (p === 'session') {
-    ss.textContent = 'Đồng bộ (cloud - session)';
-  } else if (p === 'memory') {
-    ss.textContent = 'Offline (memory persistence)';
-  } else if (p === 'none') {
-    ss.textContent = 'Không hỗ trợ storage';
-  } else {
-    ss.textContent = 'Offline';
-  }
-}
-
-
   function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,6) }
 
   function loadNotesLocal(){
@@ -311,6 +293,7 @@ function updatePersistenceStatusUI() {
       }
     };
   }
+
 
   if (btnSignOut) {
     btnSignOut.onclick = async () => {

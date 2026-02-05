@@ -267,63 +267,15 @@ function deleteIndexedDb(dbName) {
     btnSignIn.onclick = async () => {
       if (signInInProgress) return;
       signInInProgress = true;
-
       try {
-        if (auth.currentUser) {
-          console.log("Already signed in:", auth.currentUser.uid);
-          return;
-        }
-
-        console.log('SignIn click debug:', { auth, provider });
-
-        try {
-          await signInWithPopup(auth, provider);
-          console.log('signInWithPopup ok');
-        } catch (err) {
-          console.warn('Popup sign-in failed:', err);
-          console.log('err.code=', err?.code, 'err.message=', err?.message);
-
-          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || err.message?.includes('IndexedDB'))) {
-            const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Cho phép xóa cache Firebase (firebaseLocalStorageDb) để khôi phục? (dữ liệu local có thể mất).');
-            if (doClear) {
-              try {
-                await deleteIndexedDb('firebaseLocalStorageDb');
-                try { await deleteIndexedDb('firebaseLocalStorage'); } catch(e){}
-                alert('Đã xóa cache. Tải lại trang để thử đăng nhập lại.');
-                location.reload();
-                return;
-              } catch (e2) {
-                console.error('Delete IndexedDB failed', e2);
-                alert('Không thể xóa IndexedDB tự động. Vui lòng Clear site data bằng DevTools -> Application -> Clear storage.');
-                return;
-              }
-            } else {
-              alert('Bạn đã hủy xóa cache. Thử đăng nhập ở cửa sổ ẩn danh (Incognito) hoặc xóa site data thủ công.');
-              return;
-            }
-          }
-
-          const needRedirect = err && (
-            err.code === 'auth/popup-blocked' ||
-            err.code === 'auth/popup-closed-by-user' ||
-            err.code === 'auth/operation-not-supported-in-this-environment' ||
-            err.code === 'auth/cancelled-popup-request'
-          );
-
-          if (needRedirect) {
-            try {
-              await signInWithRedirect(auth, provider);
-              return;
-            } catch (err2) {
-              console.error('Redirect sign-in failed too', err2);
-              alert('Đăng nhập thất bại: ' + (err2.message || err.message));
-            }
-          } else {
-            alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error'));
-          }
-        }
+        // bắt buộc dùng redirect (không dùng popup)
+        await signInWithRedirect(auth, provider);
+        // trang sẽ điều hướng; khi quay lại onAuthStateChanged sẽ chạy
+      } catch (err) {
+        console.error('Redirect sign-in failed', err);
+        alert('Đăng nhập thất bại: ' + (err.message || err.code));
       } finally {
-        signInInProgress = false;
+        signInInProgress = false; // (redirect sẽ thay đổi trang nên phần finally có thể không chạy)
       }
     };
   }

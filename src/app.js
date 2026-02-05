@@ -276,33 +276,38 @@ function deleteIndexedDb(dbName) {
 
         console.log('SignIn click debug:', { auth, provider });
 
+        // Try popup first, fallback to redirect on common errors
         try {
           await signInWithPopup(auth, provider);
           console.log('signInWithPopup ok');
+          return;
         } catch (err) {
-          console.warn('Popup sign-in failed:', err);
-          console.log('err.code=', err?.code, 'err.message=', err?.message);
+          console.warn('Popup sign-in failed:', err?.code, err?.message);
 
-          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || err.message?.includes('IndexedDB'))) {
-            const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Cho phép xóa cache Firebase (firebaseLocalStorageDb) để khôi phục? (dữ liệu local có thể mất).');
+          // If persistence/IndexedDB issues - offer to clear and reload
+          if (err && typeof err.code === 'string' && (err.code.startsWith('app/idb') || (err.message && err.message.includes('IndexedDB')))) {
+            const doClear = confirm('Phát hiện lỗi lưu trữ trình duyệt (IndexedDB). Xóa cache Firebase (firebaseLocalStorageDb) và reload trang? (có thể mất cache local).');
             if (doClear) {
               try {
                 await deleteIndexedDb('firebaseLocalStorageDb');
                 try { await deleteIndexedDb('firebaseLocalStorage'); } catch(e){}
-                alert('Đã xóa cache. Tải lại trang để thử đăng nhập lại.');
+                // also remove local localStorage key for notes to force reload state if you want:
+                // localStorage.removeItem('notes-app-v1');
+                alert('Đã xóa cache. Trang sẽ reload.');
                 location.reload();
                 return;
               } catch (e2) {
                 console.error('Delete IndexedDB failed', e2);
-                alert('Không thể xóa IndexedDB tự động. Vui lòng Clear site data bằng DevTools -> Application -> Clear storage.');
+                alert('Không thể xóa IndexedDB tự động. Vui lòng Clear site data thủ công (DevTools → Application → Clear storage).');
                 return;
               }
             } else {
-              alert('Bạn đã hủy xóa cache. Thử đăng nhập ở cửa sổ ẩn danh (Incognito) hoặc xóa site data thủ công.');
+              alert('Bạn đã hủy. Thử đăng nhập trên cửa sổ ẩn danh hoặc xóa site data thủ công.');
               return;
             }
           }
 
+          // If popup blocked or not supported -> fallback to redirect
           const needRedirect = err && (
             err.code === 'auth/popup-blocked' ||
             err.code === 'auth/popup-closed-by-user' ||
@@ -313,14 +318,17 @@ function deleteIndexedDb(dbName) {
           if (needRedirect) {
             try {
               await signInWithRedirect(auth, provider);
-              return;
+              return; // redirect will navigate away
             } catch (err2) {
-              console.error('Redirect sign-in failed too', err2);
+              console.error('Redirect fallback failed', err2);
               alert('Đăng nhập thất bại: ' + (err2.message || err.message));
+              return;
             }
-          } else {
-            alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error'));
           }
+
+          // otherwise show error
+          alert('Đăng nhập thất bại: ' + (err.message || err.code || 'Unknown error'));
+          return;
         }
       } finally {
         signInInProgress = false;
@@ -328,16 +336,31 @@ function deleteIndexedDb(dbName) {
     };
   }
 
-  if(btnSignOut){
+  if (btnSignOut) {
     btnSignOut.onclick = async () => {
       try {
         await signOut(auth);
         console.log('Signed out.');
-      } catch(e){
+      } catch (e) {
         console.error('signOut error', e);
+        alert('Lỗi khi đăng xuất: ' + (e.message || e.code));
       }
+
+      // clear app UI state + localStorage key(s)
+      try {
+        localStorage.removeItem('notes-app-v1');
+        // remove firebase cached DB to avoid bad persistence next sign-in
+        await deleteIndexedDb('firebaseLocalStorageDb').catch(()=>{});
+        await deleteIndexedDb('firebaseLocalStorage').catch(()=>{});
+      } catch (e) {
+        console.warn('clear after signOut failed', e);
+      }
+
+      // fully reload to ensure SDK state resets — necessary on some browser/extension combos
+      location.reload();
     };
   }
+
 
   onAuthStateChanged(auth, async (user) => {
     console.log("onAuthStateChanged:", user?.uid ?? null);

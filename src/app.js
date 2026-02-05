@@ -1,4 +1,4 @@
-// src/app.js (type="module")
+// --- Đặt ở đầu src/app.js ---
 import {
   signInWithPopup,
   signInWithRedirect,
@@ -18,6 +18,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 import { auth, db, provider } from './lib/firebase.js';
+
 
 // ---------- small helper to delete IndexedDB via Promise ----------
 function deleteIndexedDb(dbName) {
